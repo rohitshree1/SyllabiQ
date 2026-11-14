@@ -1183,13 +1183,162 @@ test('Workspaces: permits optional aiStrategyBriefing while rejecting injected k
   );
 });
 
-test('Social SyllabiQ Zero-Trust: World & 1-on-1 DM messages and connections enforce sender/participant isolation', () => {
+test('Social SyllabiQ Zero-Trust: Gmail-only writes, role badge anti-spoofing, and World/DM isolation', () => {
   const db = createBaseSimulatedDb();
-  const aliceAuth = { uid: 'cand_alice', email: 'alice@university.edu', email_verified: true };
-  const bobAuth = { uid: 'cand_bob', email: 'bob@university.edu', email_verified: true };
-  const malloryAuth = { uid: 'cand_mallory', email: 'mallory@university.edu', email_verified: true };
+  const aliceAuth = { uid: 'cand_alice', email: 'alice@gmail.com', email_verified: true };
+  const bobAuth = { uid: 'cand_bob', email: 'bob@gmail.com', email_verified: true };
+  const malloryAuth = { uid: 'cand_mallory', email: 'mallory@gmail.com', email_verified: true };
+  const nonGmailAuth = { uid: 'cand_uni', email: 'student@university.edu', email_verified: true };
+  const subAdminAuth = { uid: 'uid_updates_mod', email: 'mod@updates.edu', email_verified: true };
+  const superAdminAuth = {
+    uid: 'super_admin_uid',
+    email: BOOTSTRAPPED_SUPER_ADMIN_EMAIL,
+    email_verified: true,
+  };
 
-  // Positive: verified Alice can post "hello" to World chat
+  // Non-Gmail account CANNOT create social profile, post in World, or request 1-on-1 DM
+  assert.equal(
+    evaluateFirestoreRuleOperation({
+      collection: 'social_profiles',
+      operation: 'create',
+      docId: 'cand_uni',
+      auth: nonGmailAuth,
+      db,
+      incomingData: {
+        userId: 'cand_uni',
+        profileId: 'SLQ-USR-UNIV1',
+        displayName: 'Uni Student',
+        avatarVisibility: 'world',
+        flexTier: 'Common Slate',
+        isGmailAccount: true,
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+      requestTimeISO: NOW,
+    }),
+    'PERMISSION_DENIED'
+  );
+  assert.equal(
+    evaluateFirestoreRuleOperation({
+      collection: 'social_messages',
+      operation: 'create',
+      docId: 'soc_nongmail_1',
+      auth: nonGmailAuth,
+      db,
+      incomingData: {
+        id: 'soc_nongmail_1',
+        channelType: 'world',
+        channelId: 'world',
+        participants: ['cand_uni'],
+        senderId: 'cand_uni',
+        senderName: 'Uni Student',
+        senderAvatarVisibility: 'world',
+        senderIsGmailAccount: true,
+        text: 'hello',
+        createdAt: NOW,
+      },
+      requestTimeISO: NOW,
+    }),
+    'PERMISSION_DENIED'
+  );
+
+  // Candidate CANNOT spoof Super Admin or Delegated Team Admin roleBadge on profile or message
+  assert.equal(
+    evaluateFirestoreRuleOperation({
+      collection: 'social_profiles',
+      operation: 'create',
+      docId: 'cand_alice',
+      auth: aliceAuth,
+      db,
+      incomingData: {
+        userId: 'cand_alice',
+        profileId: 'SLQ-USR-ALICE1',
+        displayName: 'Alice Sharma',
+        avatarVisibility: 'world',
+        flexTier: 'Rare Sapphire',
+        isGmailAccount: true,
+        roleBadge: 'Super Admin',
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+      requestTimeISO: NOW,
+    }),
+    'PERMISSION_DENIED'
+  );
+  assert.equal(
+    evaluateFirestoreRuleOperation({
+      collection: 'social_messages',
+      operation: 'create',
+      docId: 'soc_spoof_role',
+      auth: aliceAuth,
+      db,
+      incomingData: {
+        id: 'soc_spoof_role',
+        channelType: 'world',
+        channelId: 'world',
+        participants: ['cand_alice'],
+        senderId: 'cand_alice',
+        senderName: 'Alice Sharma',
+        senderAvatarVisibility: 'world',
+        senderIsGmailAccount: true,
+        senderRoleBadge: 'Delegated Team Admin',
+        text: 'hello',
+        createdAt: NOW,
+      },
+      requestTimeISO: NOW,
+    }),
+    'PERMISSION_DENIED'
+  );
+
+  // Verified Gmail user CAN set Teacher roleBadge, and Super Admin CAN set Super Admin roleBadge
+  assert.equal(
+    evaluateFirestoreRuleOperation({
+      collection: 'social_profiles',
+      operation: 'create',
+      docId: 'cand_alice',
+      auth: aliceAuth,
+      db,
+      incomingData: {
+        userId: 'cand_alice',
+        profileId: 'SLQ-USR-ALICE1',
+        displayName: 'Alice Sharma',
+        avatarVisibility: 'world',
+        flexTier: 'Rare Sapphire',
+        isGmailAccount: true,
+        roleBadge: 'Teacher',
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+      requestTimeISO: NOW,
+    }),
+    'ALLOW'
+  );
+  assert.equal(
+    evaluateFirestoreRuleOperation({
+      collection: 'social_messages',
+      operation: 'create',
+      docId: 'soc_super_1',
+      auth: superAdminAuth,
+      db,
+      incomingData: {
+        id: 'soc_super_1',
+        channelType: 'world',
+        channelId: 'world',
+        participants: ['super_admin_uid'],
+        senderId: 'super_admin_uid',
+        senderName: 'Rohit Shree',
+        senderAvatarVisibility: 'world',
+        senderIsGmailAccount: true,
+        senderRoleBadge: 'Super Admin',
+        text: 'Welcome to SyllabiQ!',
+        createdAt: NOW,
+      },
+      requestTimeISO: NOW,
+    }),
+    'ALLOW'
+  );
+
+  // Positive: verified Gmail user Alice can post "hello" as Teacher to World chat
   assert.equal(
     evaluateFirestoreRuleOperation({
       collection: 'social_messages',
@@ -1205,7 +1354,64 @@ test('Social SyllabiQ Zero-Trust: World & 1-on-1 DM messages and connections enf
         senderId: 'cand_alice',
         senderName: 'Alice Sharma',
         senderAvatarVisibility: 'world',
+        senderIsGmailAccount: true,
+        senderRoleBadge: 'Teacher',
         text: 'hello',
+        createdAt: NOW,
+      },
+      requestTimeISO: NOW,
+    }),
+    'ALLOW'
+  );
+
+  // Delegated sub-admin whose invite email is non-Gmail cannot use Delegated Team Admin in Social
+  // unless signed in via @gmail.com; an invited @gmail.com Sub-Admin CAN post with Delegated Team Admin.
+  db.staff_invites.inv_team_gmail_com = {
+    inviteKey: 'inv_team_gmail_com',
+    targetEmail: 'teamlead@gmail.com',
+    displayName: 'Team Lead',
+    adminPhone: '+91 98111 00001',
+    canPostUpdates: true,
+    canGrantBonuses: false,
+    canBanUsers: false,
+    status: 'active',
+    createdByUid: 'super_admin_uid',
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+  db.staff_members.uid_team_gmail = {
+    userId: 'uid_team_gmail',
+    inviteKey: 'inv_team_gmail_com',
+    displayName: 'Team Lead',
+    adminEmail: 'teamlead@gmail.com',
+    adminPhone: '+91 98111 00001',
+    role: 'sub_admin',
+    canPostUpdates: true,
+    canGrantBonuses: false,
+    canBanUsers: false,
+    active: true,
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+  void subAdminAuth;
+  assert.equal(
+    evaluateFirestoreRuleOperation({
+      collection: 'social_messages',
+      operation: 'create',
+      docId: 'soc_delegated_1',
+      auth: { uid: 'uid_team_gmail', email: 'teamlead@gmail.com', email_verified: true },
+      db,
+      incomingData: {
+        id: 'soc_delegated_1',
+        channelType: 'world',
+        channelId: 'world',
+        participants: ['uid_team_gmail'],
+        senderId: 'uid_team_gmail',
+        senderName: 'Team Lead',
+        senderAvatarVisibility: 'world',
+        senderIsGmailAccount: true,
+        senderRoleBadge: 'Delegated Team Admin',
+        text: 'Daily sprint starts now',
         createdAt: NOW,
       },
       requestTimeISO: NOW,
@@ -1229,6 +1435,7 @@ test('Social SyllabiQ Zero-Trust: World & 1-on-1 DM messages and connections enf
         senderId: 'cand_alice',
         senderName: 'Alice Sharma',
         senderAvatarVisibility: 'world',
+        senderIsGmailAccount: true,
         text: 'spoofed',
         createdAt: NOW,
       },
@@ -1247,6 +1454,7 @@ test('Social SyllabiQ Zero-Trust: World & 1-on-1 DM messages and connections enf
       senderId: 'cand_alice',
       senderName: 'Alice Sharma',
       senderAvatarVisibility: 'world',
+      senderIsGmailAccount: true,
       text: 'private study note',
       createdAt: NOW,
     },

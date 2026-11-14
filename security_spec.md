@@ -28,8 +28,9 @@
 9. **Issued Credentials & Non-Admin Verifier Notifications**:
    - `/issued_credentials/{credentialCode}` contains zero PII, disables `list` (`allow list: if false;`), allows O(1) `get` by `isValidSerialId(credentialCode)` for serial authenticity verification, and restricts `create`/`update` to the verified `ownerUid` or `isSuperAdmin()`.
    - `/credential_verifications/{verificationId}` isolates verifier PII (`verifierGmail`, `verifierName`, `verifierPost`) strictly to `targetUserId == request.auth.uid || isSuperAdmin()`, enforces `exists(/issued_credentials/$(credentialCode))` and `ownerUid == targetUserId` on `create`, and locks `acknowledged` terminally (`false -> true`).
-10. **Social SyllabiQ World & 1-on-1 Isolation (Zero PII)**:
-   - `/social_profiles/{userId}`, `/social_messages/{messageId}`, and `/social_connections/{connectionId}` strictly exclude email/phone PII and restrict writes to `isVerifiedUser()`.
+10. **Social SyllabiQ World & 1-on-1 Isolation (Zero PII, Gmail-Only, Verified Role Labels)**:
+   - `/social_profiles/{userId}`, `/social_messages/{messageId}`, and `/social_connections/{connectionId}` strictly exclude email/phone PII and restrict writes to verified Google (`@gmail.com`) accounts via `isGmailAuth()`.
+   - Role badges (`Teacher`, `Delegated Team Admin`, `Super Admin`) on social profiles and messages are verified against `isSuperAdmin()` and `isSubAdmin()` so callers cannot spoof admin/staff badges.
    - `/social_messages` distinguishes `channelType == 'world'` (readable by verified scholars) from `channelType == 'dm'` (`participants.size() == 2` and `request.auth.uid in existing().participants` enforced in both `get` and `list` without `get()`/`exists()` inside `allow list`). Messages are immutable (`allow update: if false;`).
    - `/social_connections` enforces `requesterId == request.auth.uid`, `recipientId != requesterId`, `status: 'pending' -> 'connected'` terminal transition exclusively by `recipientId == request.auth.uid` (or `isSuperAdmin()`).
 

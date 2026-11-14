@@ -41,6 +41,7 @@ import {
   buildYoutubeSearchUrl,
   computeDashboardMetrics,
 } from '../utils/studyEngine';
+import { formatPostRoleLabel } from '../utils/verificationAndReferral';
 import { FocusCompanionPanel } from './FocusCompanionPanel';
 
 interface DashboardViewProps {
@@ -121,6 +122,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             {latestUpdate ? (
               <p className="text-slate-700 truncate">
                 <strong className="text-slate-900">{latestUpdate.title}</strong>
+                <span aria-hidden="true"> · </span>
+                <span className="font-semibold text-sky-800">
+                  {latestUpdate.authorName} ·{' '}
+                  {formatPostRoleLabel(latestUpdate.authorRoleLabel) || latestUpdate.authorRoleLabel}
+                </span>
                 <span aria-hidden="true"> · </span>
                 <span>{latestUpdate.body}</span>
               </p>

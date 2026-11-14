@@ -19,6 +19,7 @@ import {
 import type { CloudTokenDiagnostic } from '../utils/firebaseConnectionGuard';
 import type { GlobalUpdateDoc } from '../types';
 import {
+  formatPostRoleLabel,
   generateFlexCardSerial,
   generateReportCardSerial,
 } from '../utils/verificationAndReferral';
@@ -241,7 +242,7 @@ export const LoginEntryScreen: React.FC<LoginEntryScreenProps> = ({
                         Overall Scholar Readiness
                       </p>
                       <p className="text-xs text-slate-300 mt-0.5">
-                        Aarav Mehta · DTU · 8.1/10 PYQ Rating
+                        DTU B.Tech Scholar · 8.1/10 PYQ Rating
                       </p>
                     </div>
                     <div className="border-t border-white/10 pt-2 flex items-center justify-between gap-2 text-[11px]">
@@ -294,6 +295,14 @@ export const LoginEntryScreen: React.FC<LoginEntryScreenProps> = ({
                     <div className="flex items-center gap-2 min-w-0">
                       <Bell className="h-3.5 w-3.5 text-sky-300 shrink-0" />
                       <span className="font-semibold text-white truncate">{pinnedUpdate.title}</span>
+                      <span aria-hidden="true" className="text-slate-500">
+                        ·
+                      </span>
+                      <span className="font-semibold text-sky-300 shrink-0">
+                        {pinnedUpdate.authorName} ·{' '}
+                        {formatPostRoleLabel(pinnedUpdate.authorRoleLabel) ||
+                          pinnedUpdate.authorRoleLabel}
+                      </span>
                       <span aria-hidden="true" className="text-slate-500">
                         ·
                       </span>

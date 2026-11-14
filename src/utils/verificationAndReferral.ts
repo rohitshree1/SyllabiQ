@@ -5,6 +5,7 @@ import type {
   CandidateXpSnapshot,
   FlexCardRarityTier,
   LearningStylePreset,
+  PostRoleBadge,
   VerifierPostRole,
 } from '../types.ts';
 import { computeDashboardMetrics } from './studyEngine.ts';
@@ -154,6 +155,81 @@ export function formatVerifierPostLabel(post: VerifierPostRole): string {
   if (post === 'teacher') return 'Teacher / Faculty';
   if (post === 'company_executive') return 'Company Executive / Recruiter';
   return 'Student / Peer';
+}
+
+const KNOWN_BOT_IDS = new Set([
+  'cand-ananya-02',
+  'cand-kabir-03',
+  'cand-meera-04',
+  'cand-aarav-01',
+  'cand-banned-04',
+  'sandbox-candidate',
+]);
+
+const KNOWN_BOT_NAMES = new Set([
+  'ananya verma',
+  'kabir nair',
+  'meera krishnan',
+  'aarav mehta',
+  'aarav sharma',
+]);
+
+export function isGmailEmail(email: unknown): boolean {
+  if (typeof email !== 'string') return false;
+  return /^[^@\s]+@gmail\.com$/i.test(email.trim());
+}
+
+export function isBotAccountId(uid: unknown): boolean {
+  if (typeof uid !== 'string') return false;
+  const trimmed = uid.trim().toLowerCase();
+  if (!trimmed) return false;
+  if (KNOWN_BOT_IDS.has(trimmed)) return true;
+  if (/^cand-(aarav|ananya|kabir|meera|banned)-/i.test(trimmed)) return true;
+  if (trimmed.startsWith('sandbox-')) return true;
+  return false;
+}
+
+export function isBotDisplayName(name: unknown): boolean {
+  if (typeof name !== 'string') return false;
+  return KNOWN_BOT_NAMES.has(name.trim().toLowerCase());
+}
+
+export function formatPostRoleLabel(raw: unknown): PostRoleBadge | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized === 'super admin' || normalized === 'super_admin') {
+    return 'Super Admin';
+  }
+  if (
+    normalized === 'delegated team admin' ||
+    normalized === 'delegated admin' ||
+    normalized === 'minimal delegated admin' ||
+    normalized === 'maximum delegated admin' ||
+    normalized === 'read-only delegated admin' ||
+    normalized === 'sub_admin' ||
+    normalized === 'sub admin' ||
+    normalized.includes('delegated')
+  ) {
+    return 'Delegated Team Admin';
+  }
+  if (normalized === 'teacher' || normalized === 'teacher / faculty' || normalized === 'faculty') {
+    return 'Teacher';
+  }
+  return undefined;
+}
+
+export function resolvePostRoleBadge(params: {
+  staffTier?: 'none' | 'sub_admin' | 'super_admin';
+  accountRole?: 'student' | 'teacher';
+  rawBadge?: unknown;
+}): PostRoleBadge | undefined {
+  if (params.staffTier === 'super_admin') return 'Super Admin';
+  if (params.staffTier === 'sub_admin') return 'Delegated Team Admin';
+  const explicit = formatPostRoleLabel(params.rawBadge);
+  if (explicit) return explicit;
+  if (params.accountRole === 'teacher') return 'Teacher';
+  return undefined;
 }
 
 export function validateVerifierSubmission(params: {

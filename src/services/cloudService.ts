@@ -43,6 +43,7 @@ import type {
   IndividualBonusDoc,
   IndividualBonusType,
   IssuedCredentialDoc,
+  PostRoleBadge,
   SocialChatMessage,
   SocialConnection,
   SocialDirectoryPeer,
@@ -59,7 +60,10 @@ import {
   clampInt,
   DEMO_PLACEHOLDER_EMAIL,
   emailToInviteKey,
+  formatPostRoleLabel,
+  isBotAccountId,
   isDemoPlaceholderStudentName,
+  isGmailEmail,
   isSuperAdminCandidateRecord,
   isSuperAdminEmail,
   resolveAuthenticatedDisplayName,
@@ -798,6 +802,9 @@ export function subscribeToCandidateBonuses(
           targetName: String(d.targetName || ''),
           grantedByUid: String(d.grantedByUid || ''),
           grantedByName: String(d.grantedByName || 'Admin'),
+          grantedByRoleLabel: d.grantedByRoleLabel
+            ? String(d.grantedByRoleLabel)
+            : undefined,
           bonusTitle: String(d.bonusTitle || ''),
           bonusType: (d.bonusType as IndividualBonusType) || 'xp_boost',
           pointsAwarded: Number(d.pointsAwarded || 0),
@@ -918,7 +925,12 @@ export async function fetchCandidatesForStaff(params: {
           const pii = piiByUid.get(ownerUid);
           return parseCandidateSummaryFromFirestore(ownerUid, d, pii);
         })
-        .filter((c) => !isSuperAdminCandidateRecord(c, params.staffUid));
+        .filter(
+          (c) =>
+            !isSuperAdminCandidateRecord(c, params.staffUid) &&
+            !isBotAccountId(c.ownerUid) &&
+            isGmailEmail(c.email || c.contactEmail)
+        );
 
       // Sync bounded O(1) AdminDigest overview so delegated Sub-Admins also receive full candidate academic + outreach profiles without O(n) list queries
       // Super Admin identity & details are strictly excluded from both the live roster and AdminDigest.
@@ -997,7 +1009,12 @@ export async function fetchCandidatesForStaff(params: {
     if (!digestSnap.exists()) return [];
     const entries = (digestSnap.data().entries || []) as AdminDigestEntry[];
     return entries
-      .filter((e) => !isSuperAdminCandidateRecord(e))
+      .filter(
+        (e) =>
+          !isSuperAdminCandidateRecord(e) &&
+          !isBotAccountId(e.ownerUid) &&
+          isGmailEmail(e.email || e.contactEmail)
+      )
       .map((e) => ({
         ...e,
         examDate: e.examDate || '',
@@ -1039,7 +1056,11 @@ export async function lookupSingleCandidateForStaff(
     }
 
     const parsed = parseCandidateSummaryFromFirestore(cleanId, d, { email, authProvider });
-    if (isSuperAdminCandidateRecord(parsed)) {
+    if (
+      isSuperAdminCandidateRecord(parsed) ||
+      isBotAccountId(parsed.ownerUid) ||
+      !isGmailEmail(parsed.email || parsed.contactEmail)
+    ) {
       return null;
     }
     return parsed;
@@ -1082,6 +1103,7 @@ export async function grantIndividualBonusInCloud(params: {
   targetCandidate: CandidateSummaryDoc;
   grantedByUid: string;
   grantedByName: string;
+  grantedByRoleLabel?: string;
   bonusTitle: string;
   bonusType: IndividualBonusType;
   pointsAwarded: number;
@@ -1101,31 +1123,41 @@ export async function grantIndividualBonusInCloud(params: {
     : 'Keep pushing!';
 
   try {
-    await setDoc(doc(db, 'individual_bonuses', bonusId), {
-      targetUserId: params.targetCandidate.ownerUid,
-      targetName: sanitizeText(
-        params.targetCandidate.displayName,
-        BLUEPRINT_LIMITS.displayNameMax,
-        'Scholar'
-      ),
-      grantedByUid: params.grantedByUid,
-      grantedByName: sanitizeText(
-        params.grantedByName,
-        BLUEPRINT_LIMITS.displayNameMax,
-        'SyllabiQ Admin'
-      ),
-      bonusTitle: sanitizeText(
-        params.bonusTitle,
-        BLUEPRINT_LIMITS.bonusTitleMax,
-        defaultTitle
-      ),
-      bonusType: params.bonusType,
-      pointsAwarded: clampedPoints,
-      message: sanitizeText(params.message, BLUEPRINT_LIMITS.bonusMessageMax, defaultMessage),
-      acknowledged: false,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+    await setDoc(
+      doc(db, 'individual_bonuses', bonusId),
+      stripUndefinedDeep({
+        targetUserId: params.targetCandidate.ownerUid,
+        targetName: sanitizeText(
+          params.targetCandidate.displayName,
+          BLUEPRINT_LIMITS.displayNameMax,
+          'Scholar'
+        ),
+        grantedByUid: params.grantedByUid,
+        grantedByName: sanitizeText(
+          params.grantedByName,
+          BLUEPRINT_LIMITS.displayNameMax,
+          'SyllabiQ Admin'
+        ),
+        grantedByRoleLabel: params.grantedByRoleLabel
+          ? sanitizeText(
+              params.grantedByRoleLabel,
+              BLUEPRINT_LIMITS.roleLabelMax,
+              'Delegated Team Admin'
+            )
+          : undefined,
+        bonusTitle: sanitizeText(
+          params.bonusTitle,
+          BLUEPRINT_LIMITS.bonusTitleMax,
+          defaultTitle
+        ),
+        bonusType: params.bonusType,
+        pointsAwarded: clampedPoints,
+        message: sanitizeText(params.message, BLUEPRINT_LIMITS.bonusMessageMax, defaultMessage),
+        acknowledged: false,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    );
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, `individual_bonuses/${bonusId}`);
   }
@@ -1507,8 +1539,16 @@ export async function upsertSocialProfileInCloud(params: {
   avatarVisibility: AvatarVisibility;
   flexTier: FlexCardRarityTier;
   profileId?: string;
+  isGmailAccount?: boolean;
+  roleBadge?: PostRoleBadge;
 }): Promise<void> {
-  if (!auth.currentUser || !auth.currentUser.emailVerified || auth.currentUser.uid !== params.userId) {
+  if (
+    !auth.currentUser ||
+    !auth.currentUser.emailVerified ||
+    !isGmailEmail(auth.currentUser.email) ||
+    auth.currentUser.uid !== params.userId ||
+    isBotAccountId(params.userId)
+  ) {
     return;
   }
   const ref = doc(db, 'social_profiles', params.userId);
@@ -1527,6 +1567,7 @@ export async function upsertSocialProfileInCloud(params: {
     40,
     generateScholarProfileId(params.userId)
   );
+  const roleBadge = formatPostRoleLabel(params.roleBadge);
 
   try {
     const snap = await getDoc(ref);
@@ -1540,6 +1581,8 @@ export async function upsertSocialProfileInCloud(params: {
           avatarUrl: cleanAvatar,
           avatarVisibility: vis,
           flexTier: tier,
+          isGmailAccount: true,
+          roleBadge,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         })
@@ -1552,6 +1595,8 @@ export async function upsertSocialProfileInCloud(params: {
           avatarUrl: cleanAvatar,
           avatarVisibility: vis,
           flexTier: tier,
+          isGmailAccount: true,
+          roleBadge,
           updatedAt: serverTimestamp(),
         })
       );
@@ -1569,20 +1614,24 @@ export function subscribeToSocialProfilesInCloud(
   return onSnapshot(
     q,
     (snap) => {
-      const list: SocialDirectoryPeer[] = snap.docs.map((docSnap) => {
-        const d = docSnap.data();
-        const uid = String(d.userId || docSnap.id);
-        return {
-          userId: uid,
-          profileId: String(d.profileId || generateScholarProfileId(uid)),
-          displayName: String(d.displayName || 'Scholar'),
-          avatarUrl: typeof d.avatarUrl === 'string' && d.avatarUrl ? d.avatarUrl : undefined,
-          avatarVisibility:
-            d.avatarVisibility === 'connections_only' ? 'connections_only' : 'world',
-          flexTier: (d.flexTier as FlexCardRarityTier) || 'Common Slate',
-          online: true,
-        };
-      });
+      const list: SocialDirectoryPeer[] = snap.docs
+        .map((docSnap) => {
+          const d = docSnap.data();
+          const uid = String(d.userId || docSnap.id);
+          return {
+            userId: uid,
+            profileId: String(d.profileId || generateScholarProfileId(uid)),
+            displayName: String(d.displayName || 'Scholar'),
+            avatarUrl: typeof d.avatarUrl === 'string' && d.avatarUrl ? d.avatarUrl : undefined,
+            avatarVisibility:
+              d.avatarVisibility === 'connections_only' ? 'connections_only' : 'world',
+            flexTier: (d.flexTier as FlexCardRarityTier) || 'Common Slate',
+            isGmailAccount: Boolean(d.isGmailAccount),
+            roleBadge: formatPostRoleLabel(d.roleBadge),
+            online: true,
+          } satisfies SocialDirectoryPeer;
+        })
+        .filter((p) => p.isGmailAccount === true && !isBotAccountId(p.userId));
       onUpdate(list);
     },
     (error) => {
@@ -1625,6 +1674,8 @@ function mapSocialMessageDoc(docId: string, d: Record<string, unknown>): SocialC
       typeof d.senderAvatarUrl === 'string' && d.senderAvatarUrl ? d.senderAvatarUrl : undefined,
     senderAvatarVisibility:
       d.senderAvatarVisibility === 'connections_only' ? 'connections_only' : 'world',
+    senderIsGmailAccount: Boolean(d.senderIsGmailAccount),
+    senderRoleBadge: formatPostRoleLabel(d.senderRoleBadge),
     text: String(d.text || ''),
     flexCard,
     createdAt: timestampToISO(d.createdAt),
@@ -1644,6 +1695,7 @@ export function subscribeToSocialWorldMessagesInCloud(
     (snap) => {
       const list = snap.docs
         .map((docSnap) => mapSocialMessageDoc(docSnap.id, docSnap.data()))
+        .filter((m) => !isBotAccountId(m.senderId) && m.senderIsGmailAccount === true)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
       onUpdate(list);
     },
@@ -1668,7 +1720,10 @@ export function subscribeToSocialDmMessagesInCloud(
     (snap) => {
       const list = snap.docs
         .map((docSnap) => mapSocialMessageDoc(docSnap.id, docSnap.data()))
-        .filter((m) => m.channelType === 'dm')
+        .filter(
+          (m) =>
+            m.channelType === 'dm' && !isBotAccountId(m.senderId) && m.senderIsGmailAccount === true
+        )
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
       onUpdate(list);
     },
@@ -1688,10 +1743,18 @@ export async function publishSocialMessageInCloud(params: {
   senderName: string;
   senderAvatarUrl?: string;
   senderAvatarVisibility: AvatarVisibility;
+  senderIsGmailAccount?: boolean;
+  senderRoleBadge?: PostRoleBadge;
   text: string;
   flexCard?: SocialFlexAttachment;
 }): Promise<void> {
-  if (!auth.currentUser || !auth.currentUser.emailVerified || auth.currentUser.uid !== params.senderId) {
+  if (
+    !auth.currentUser ||
+    !auth.currentUser.emailVerified ||
+    !isGmailEmail(auth.currentUser.email) ||
+    auth.currentUser.uid !== params.senderId ||
+    isBotAccountId(params.senderId)
+  ) {
     return;
   }
 
@@ -1723,6 +1786,8 @@ export async function publishSocialMessageInCloud(params: {
       })
     : undefined;
 
+  const senderRoleBadge = formatPostRoleLabel(params.senderRoleBadge);
+
   try {
     await setDoc(
       doc(db, 'social_messages', params.id),
@@ -1736,6 +1801,8 @@ export async function publishSocialMessageInCloud(params: {
         senderAvatarUrl: cleanAvatar,
         senderAvatarVisibility:
           params.senderAvatarVisibility === 'connections_only' ? 'connections_only' : 'world',
+        senderIsGmailAccount: true,
+        senderRoleBadge,
         text: sanitizeText(params.text, 500, ''),
         flexCard: cleanFlex,
         createdAt: serverTimestamp(),
@@ -1804,8 +1871,10 @@ export async function requestSocialConnectionInCloud(params: {
   if (
     !auth.currentUser ||
     !auth.currentUser.emailVerified ||
+    !isGmailEmail(auth.currentUser.email) ||
     auth.currentUser.uid !== params.requesterId ||
-    params.recipientId === params.requesterId
+    params.recipientId === params.requesterId ||
+    isBotAccountId(params.recipientId)
   ) {
     return null;
   }
@@ -1884,7 +1953,7 @@ export async function acceptSocialConnectionInCloud(params: {
   recipientAvatarUrl?: string;
   recipientAvatarVisibility: AvatarVisibility;
 }): Promise<void> {
-  if (!auth.currentUser || !auth.currentUser.emailVerified) return;
+  if (!auth.currentUser || !auth.currentUser.emailVerified || !isGmailEmail(auth.currentUser.email)) return;
   const cleanAvatar =
     typeof params.recipientAvatarUrl === 'string' &&
     params.recipientAvatarUrl.length > 0 &&

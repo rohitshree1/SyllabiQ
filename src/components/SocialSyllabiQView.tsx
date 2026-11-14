@@ -25,6 +25,7 @@ import type {
   AvatarVisibility,
   CandidateXpSnapshot,
   IssuedCredentialDoc,
+  PostRoleBadge,
   SocialChatMessage,
   SocialConnection,
   SocialDirectoryPeer,
@@ -47,7 +48,10 @@ import {
   validateSocialMessageConduct,
 } from '../utils/skillRefreshAndEthics';
 import {
+  formatPostRoleLabel,
   generateScholarProfileId,
+  isBotAccountId,
+  isBotDisplayName,
   normalizeProfileId,
 } from '../utils/verificationAndReferral';
 import {
@@ -65,6 +69,9 @@ interface SocialSyllabiQViewProps {
   state: AppState;
   ownerKey: string;
   isCloudAuthenticated?: boolean;
+  isGmailAuthenticated?: boolean;
+  userEmail?: string;
+  currentUserRoleBadge?: PostRoleBadge;
   avatarUrl?: string;
   xpSnapshot: CandidateXpSnapshot;
   staleSubjects: SubjectRefreshStatus[];
@@ -89,10 +96,41 @@ function getInitials(name: string): string {
   return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
 }
 
+function renderPostRoleTag(badge?: PostRoleBadge | string, darkBg = false) {
+  const formatted = formatPostRoleLabel(badge);
+  if (!formatted) return null;
+  if (darkBg) {
+    const darkColor =
+      formatted === 'Super Admin'
+        ? 'text-amber-300'
+        : formatted === 'Delegated Team Admin'
+        ? 'text-sky-300'
+        : 'text-indigo-200';
+    return <span className={`text-[11px] font-semibold ${darkColor}`}>· {formatted}</span>;
+  }
+  const styleClass =
+    formatted === 'Super Admin'
+      ? 'text-amber-900 bg-amber-50 border-amber-200'
+      : formatted === 'Delegated Team Admin'
+      ? 'text-sky-900 bg-sky-50 border-sky-200'
+      : 'text-indigo-900 bg-indigo-50 border-indigo-200';
+  return (
+    <span
+      data-testid={`role-label-${formatted.toLowerCase().replace(/\s+/g, '-')}`}
+      className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-none whitespace-nowrap ${styleClass}`}
+    >
+      {formatted}
+    </span>
+  );
+}
+
 export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
   state,
   ownerKey,
   isCloudAuthenticated = false,
+  isGmailAuthenticated = false,
+  userEmail,
+  currentUserRoleBadge,
   avatarUrl,
   xpSnapshot,
   staleSubjects,
@@ -141,6 +179,8 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
     avatarVisibility,
     flexTier: xpSnapshot.rarity.tier,
     profileId: myProfileId,
+    isGmailAuthenticated,
+    currentUserRoleBadge,
   });
   latestIdentityRef.current = {
     ownerKey,
@@ -149,6 +189,8 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
     avatarVisibility,
     flexTier: xpSnapshot.rarity.tier,
     profileId: myProfileId,
+    isGmailAuthenticated,
+    currentUserRoleBadge,
   };
 
   // Merge helpers (strictly idempotent per real-time guidelines)
@@ -205,19 +247,23 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
         retryAttempt = 0;
         setWsConnected(true);
         const ident = latestIdentityRef.current;
-        ws.send(
-          JSON.stringify({
-            event: 'presence:hello',
-            payload: {
-              userId: ident.ownerKey,
-              displayName: ident.candidateName,
-              avatarUrl: ident.avatarUrl,
-              avatarVisibility: ident.avatarVisibility,
-              flexTier: ident.flexTier,
-              profileId: ident.profileId,
-            },
-          })
-        );
+        if (ident.isGmailAuthenticated && ident.ownerKey !== 'sandbox-candidate') {
+          ws.send(
+            JSON.stringify({
+              event: 'presence:hello',
+              payload: {
+                userId: ident.ownerKey,
+                displayName: ident.candidateName,
+                avatarUrl: ident.avatarUrl,
+                avatarVisibility: ident.avatarVisibility,
+                flexTier: ident.flexTier,
+                profileId: ident.profileId,
+                isGmailAccount: true,
+                roleBadge: ident.currentUserRoleBadge,
+              },
+            })
+          );
+        }
       };
 
       ws.onmessage = (evt) => {
@@ -229,25 +275,67 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
           };
           if (packet.event === 'social:init' && packet.payload) {
             if (Array.isArray(packet.payload.messages)) {
-              setMessages(packet.payload.messages as SocialChatMessage[]);
+              setMessages(
+                (packet.payload.messages as SocialChatMessage[]).filter(
+                  (m) =>
+                    m.senderIsGmailAccount === true &&
+                    !isBotAccountId(m.senderId) &&
+                    !isBotDisplayName(m.senderName)
+                )
+              );
             }
             if (Array.isArray(packet.payload.connections)) {
-              setConnections(packet.payload.connections as SocialConnection[]);
+              setConnections(
+                (packet.payload.connections as SocialConnection[]).filter(
+                  (c) => !isBotAccountId(c.requesterId) && !isBotAccountId(c.recipientId)
+                )
+              );
             }
             if (Array.isArray(packet.payload.vaultGrants)) {
-              setVaultGrants(packet.payload.vaultGrants as SocialVaultGrant[]);
+              setVaultGrants(
+                (packet.payload.vaultGrants as SocialVaultGrant[]).filter(
+                  (v) => !isBotAccountId(v.ownerId) && !isBotAccountId(v.granteeId)
+                )
+              );
             }
             if (Array.isArray(packet.payload.directory)) {
-              setDirectory(packet.payload.directory as SocialDirectoryPeer[]);
+              setDirectory(
+                (packet.payload.directory as SocialDirectoryPeer[]).filter(
+                  (d) =>
+                    d.isGmailAccount === true &&
+                    !isBotAccountId(d.userId) &&
+                    !isBotDisplayName(d.displayName)
+                )
+              );
             }
           } else if (packet.event === 'social:message:created' && packet.payload?.message) {
-            upsertMessage(packet.payload.message as SocialChatMessage);
+            const incomingMsg = packet.payload.message as SocialChatMessage;
+            if (
+              incomingMsg.senderIsGmailAccount === true &&
+              !isBotAccountId(incomingMsg.senderId) &&
+              !isBotDisplayName(incomingMsg.senderName)
+            ) {
+              upsertMessage(incomingMsg);
+            }
           } else if (packet.event === 'social:connection:updated' && packet.payload?.connection) {
-            upsertConnection(packet.payload.connection as SocialConnection);
+            const incomingConn = packet.payload.connection as SocialConnection;
+            if (!isBotAccountId(incomingConn.requesterId) && !isBotAccountId(incomingConn.recipientId)) {
+              upsertConnection(incomingConn);
+            }
           } else if (packet.event === 'social:vault:updated' && packet.payload?.grant) {
-            upsertVaultGrant(packet.payload.grant as SocialVaultGrant);
+            const incomingGrant = packet.payload.grant as SocialVaultGrant;
+            if (!isBotAccountId(incomingGrant.ownerId) && !isBotAccountId(incomingGrant.granteeId)) {
+              upsertVaultGrant(incomingGrant);
+            }
           } else if (packet.event === 'social:presence:updated' && packet.payload?.directory) {
-            setDirectory(packet.payload.directory as SocialDirectoryPeer[]);
+            setDirectory(
+              (packet.payload.directory as SocialDirectoryPeer[]).filter(
+                (d) =>
+                  d.isGmailAccount === true &&
+                  !isBotAccountId(d.userId) &&
+                  !isBotDisplayName(d.displayName)
+              )
+            );
           }
         } catch {
           // Ignore malformed WS message
@@ -268,25 +356,47 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
       setBackendAvailable(initial.backendAvailable);
       setMessages((prev) => {
         const map = new Map(prev.map((m) => [m.id, m]));
-        for (const m of initial.messages) map.set(m.id, m);
+        for (const m of initial.messages) {
+          if (
+            m.senderIsGmailAccount === true &&
+            !isBotAccountId(m.senderId) &&
+            !isBotDisplayName(m.senderName)
+          ) {
+            map.set(m.id, m);
+          }
+        }
         return Array.from(map.values()).slice(-200);
       });
       setConnections((prev) => {
         const map = new Map(prev.map((c) => [c.id, c]));
-        for (const c of initial.connections) map.set(c.id, c);
+        for (const c of initial.connections) {
+          if (!isBotAccountId(c.requesterId) && !isBotAccountId(c.recipientId)) {
+            map.set(c.id, c);
+          }
+        }
         return Array.from(map.values());
       });
-      setVaultGrants(initial.vaultGrants);
+      setVaultGrants(
+        initial.vaultGrants.filter((v) => !isBotAccountId(v.ownerId) && !isBotAccountId(v.granteeId))
+      );
       setDirectory((prev) => {
         const map = new Map(prev.map((d) => [d.userId, d]));
-        for (const d of initial.directory) map.set(d.userId, d);
+        for (const d of initial.directory) {
+          if (
+            d.isGmailAccount === true &&
+            !isBotAccountId(d.userId) &&
+            !isBotDisplayName(d.displayName)
+          ) {
+            map.set(d.userId, d);
+          }
+        }
         return Array.from(map.values());
       });
 
       if (initial.backendAvailable) {
         connectSocket();
-      } else {
-        // Register local scholar card into directory on static hosts
+      } else if (latestIdentityRef.current.isGmailAuthenticated && ownerKey !== 'sandbox-candidate') {
+        // Register local verified Gmail scholar card into directory on static hosts
         const ident = latestIdentityRef.current;
         void updateSocialProfileVisibilityApi({
           userId: ident.ownerKey,
@@ -295,6 +405,8 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
           avatarUrl: ident.avatarUrl,
           avatarVisibility: ident.avatarVisibility,
           flexTier: ident.flexTier,
+          isGmailAccount: true,
+          roleBadge: ident.currentUserRoleBadge,
         });
       }
     });
@@ -307,26 +419,47 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
         ws.close();
       }
     };
-  }, [ownerKey]);
+  }, [ownerKey, isGmailAuthenticated, currentUserRoleBadge]);
 
-  // Real-time Cloud Firestore Social Sync for verified Firebase scholars (cross-browser on GitHub Pages)
+  // Real-time Cloud Firestore Social Sync for verified Gmail accounts (cross-browser on GitHub Pages)
   useEffect(() => {
     if (!isCloudAuthenticated || !ownerKey || ownerKey === 'sandbox-candidate') return;
 
-    const ident = latestIdentityRef.current;
-    void upsertSocialProfileInCloud({
-      userId: ident.ownerKey,
-      profileId: ident.profileId,
-      displayName: ident.candidateName,
-      avatarUrl: ident.avatarUrl,
-      avatarVisibility: ident.avatarVisibility,
-      flexTier: ident.flexTier,
-    });
+    if (isGmailAuthenticated) {
+      const ident = latestIdentityRef.current;
+      void upsertSocialProfileInCloud({
+        userId: ident.ownerKey,
+        profileId: ident.profileId,
+        displayName: ident.candidateName,
+        avatarUrl: ident.avatarUrl,
+        avatarVisibility: ident.avatarVisibility,
+        flexTier: ident.flexTier,
+        isGmailAccount: true,
+        roleBadge: ident.currentUserRoleBadge,
+      });
+    }
 
     const unsubProfiles = subscribeToSocialProfilesInCloud((cloudPeers) => {
       setDirectory((prev) => {
-        const map = new Map(prev.map((p) => [p.userId, p]));
-        for (const p of cloudPeers) map.set(p.userId, p);
+        const map = new Map(
+          prev
+            .filter(
+              (p) =>
+                p.isGmailAccount === true &&
+                !isBotAccountId(p.userId) &&
+                !isBotDisplayName(p.displayName)
+            )
+            .map((p) => [p.userId, p])
+        );
+        for (const p of cloudPeers) {
+          if (
+            p.isGmailAccount === true &&
+            !isBotAccountId(p.userId) &&
+            !isBotDisplayName(p.displayName)
+          ) {
+            map.set(p.userId, p);
+          }
+        }
         return Array.from(map.values());
       });
     });
@@ -334,7 +467,15 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
     const unsubWorld = subscribeToSocialWorldMessagesInCloud((cloudMsgs) => {
       setMessages((prev) => {
         const map = new Map(prev.map((m) => [m.id, m]));
-        for (const m of cloudMsgs) map.set(m.id, m);
+        for (const m of cloudMsgs) {
+          if (
+            m.senderIsGmailAccount === true &&
+            !isBotAccountId(m.senderId) &&
+            !isBotDisplayName(m.senderName)
+          ) {
+            map.set(m.id, m);
+          }
+        }
         return Array.from(map.values())
           .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
           .slice(-200);
@@ -344,7 +485,15 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
     const unsubDm = subscribeToSocialDmMessagesInCloud(ownerKey, (cloudDms) => {
       setMessages((prev) => {
         const map = new Map(prev.map((m) => [m.id, m]));
-        for (const m of cloudDms) map.set(m.id, m);
+        for (const m of cloudDms) {
+          if (
+            m.senderIsGmailAccount === true &&
+            !isBotAccountId(m.senderId) &&
+            !isBotDisplayName(m.senderName)
+          ) {
+            map.set(m.id, m);
+          }
+        }
         return Array.from(map.values())
           .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
           .slice(-200);
@@ -354,7 +503,11 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
     const unsubConns = subscribeToSocialConnectionsInCloud(ownerKey, (cloudConns) => {
       setConnections((prev) => {
         const map = new Map(prev.map((c) => [c.id, c]));
-        for (const c of cloudConns) map.set(c.id, c);
+        for (const c of cloudConns) {
+          if (!isBotAccountId(c.requesterId) && !isBotAccountId(c.recipientId)) {
+            map.set(c.id, c);
+          }
+        }
         return Array.from(map.values());
       });
     });
@@ -365,7 +518,7 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
       unsubDm();
       unsubConns();
     };
-  }, [isCloudAuthenticated, ownerKey]);
+  }, [isCloudAuthenticated, isGmailAuthenticated, ownerKey, currentUserRoleBadge]);
 
   // Sync profile visibility & avatar updates to server directory (delegated to App handler)
   const handleToggleAvatarVisibility = (nextVis: AvatarVisibility) => {
@@ -385,11 +538,30 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
     }
   };
 
-  // Connected peers & pending requests for current scholar
+  const gmailDirectory = useMemo(
+    () =>
+      directory.filter(
+        (d) =>
+          d.isGmailAccount === true &&
+          !isBotAccountId(d.userId) &&
+          !isBotDisplayName(d.displayName)
+      ),
+    [directory]
+  );
+
+  const otherGmailScholars = useMemo(
+    () => gmailDirectory.filter((d) => d.userId !== ownerKey),
+    [gmailDirectory, ownerKey]
+  );
+
+  // Connected peers & pending requests for current scholar (strictly real Gmail accounts, zero bots)
   const myConnections = useMemo(
     () =>
       connections.filter(
-        (c) => c.requesterId === ownerKey || c.recipientId === ownerKey
+        (c) =>
+          (c.requesterId === ownerKey || c.recipientId === ownerKey) &&
+          !isBotAccountId(c.requesterId) &&
+          !isBotAccountId(c.recipientId)
       ),
     [connections, ownerKey]
   );
@@ -410,7 +582,7 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
       .map((c) => {
         const isReq = c.requesterId === ownerKey;
         const peerId = isReq ? c.recipientId : c.requesterId;
-        const dirEntry = directory.find((d) => d.userId === peerId);
+        const dirEntry = gmailDirectory.find((d) => d.userId === peerId);
         return {
           connectionId: c.id,
           peerId,
@@ -422,10 +594,11 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
             (isReq ? c.recipientAvatarVisibility : c.requesterAvatarVisibility) ||
             'world',
           flexTier: dirEntry?.flexTier || 'Rare Sapphire',
+          roleBadge: formatPostRoleLabel(dirEntry?.roleBadge),
           online: Boolean(dirEntry?.online),
         };
       });
-  }, [myConnections, ownerKey, directory]);
+  }, [myConnections, ownerKey, gmailDirectory]);
 
   const incomingPendingRequests = useMemo(
     () =>
@@ -467,7 +640,8 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
         channelType: 'world' as const,
         channelId: 'world',
         title: 'World Scholar Stream',
-        subtitle: 'Direct to World Communication · Visible to everyone on SyllabiQ · Names & Verified FlexCards Only',
+        subtitle:
+          'Direct to World Communication · Gmail-verified accounts only · Teacher, Delegated Team Admin & Super Admin roles labeled',
         peer: null,
       };
     }
@@ -483,12 +657,27 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
     };
   }, [section, activeDmPeer, ownerKey]);
 
+  const worldMessagesCount = useMemo(
+    () =>
+      messages.filter(
+        (m) =>
+          m.channelType === 'world' &&
+          m.senderIsGmailAccount === true &&
+          !isBotAccountId(m.senderId) &&
+          !isBotDisplayName(m.senderName)
+      ).length,
+    [messages]
+  );
+
   const visibleChannelMessages = useMemo(() => {
     if (!activeChannelMeta) return [];
     return messages.filter(
       (m) =>
         m.channelType === activeChannelMeta.channelType &&
-        m.channelId === activeChannelMeta.channelId
+        m.channelId === activeChannelMeta.channelId &&
+        m.senderIsGmailAccount === true &&
+        !isBotAccountId(m.senderId) &&
+        !isBotDisplayName(m.senderName)
     );
   }, [messages, activeChannelMeta]);
 
@@ -500,13 +689,13 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
     }
   }, [visibleChannelMessages.length, activeChannelMeta?.channelId]);
 
-  // Search filter for scholars by Profile ID or Name in World section
+  // Search filter for Gmail-verified scholars by Profile ID or Name in World section
   const matchedScholars = useMemo(() => {
     const raw = profileIdSearch.trim();
     if (!raw) return [];
     const normalized = normalizeProfileId(raw);
     const lower = raw.toLowerCase();
-    return directory.filter((peer) => {
+    return gmailDirectory.filter((peer) => {
       const pid = peer.profileId || generateScholarProfileId(peer.userId);
       const normPid = normalizeProfileId(pid);
       return (
@@ -515,12 +704,19 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
         peer.userId.toLowerCase().includes(lower)
       );
     });
-  }, [directory, profileIdSearch]);
+  }, [gmailDirectory, profileIdSearch]);
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeChannelMeta) return;
     setComposerError('');
+
+    if (!isGmailAuthenticated || ownerKey === 'sandbox-candidate') {
+      setComposerError(
+        'Only accounts signed in with Google (@gmail.com) can post in World or 1-on-1 chats.'
+      );
+      return;
+    }
 
     const matchedFlexDoc = selectedFlexSerial
       ? issuedFlexCards.find((f) => f.credentialCode === selectedFlexSerial)
@@ -559,6 +755,8 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
         senderName: candidateName,
         senderAvatarUrl: avatarUrl,
         senderAvatarVisibility: avatarVisibility,
+        senderIsGmailAccount: true,
+        senderRoleBadge: currentUserRoleBadge,
         text: conductCheck.sanitizedText,
         flexCard: flexAttachment,
       });
@@ -571,7 +769,7 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
         upsertMessage(res.message);
       }
 
-      if (isCloudAuthenticated && ownerKey !== 'sandbox-candidate') {
+      if (isCloudAuthenticated) {
         void publishSocialMessageInCloud({
           id: msgId,
           channelType: activeChannelMeta.channelType,
@@ -581,6 +779,8 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
           senderName: candidateName,
           senderAvatarUrl: avatarUrl,
           senderAvatarVisibility: avatarVisibility,
+          senderIsGmailAccount: true,
+          senderRoleBadge: currentUserRoleBadge,
           text: conductCheck.sanitizedText,
           flexCard: flexAttachment,
         });
@@ -594,8 +794,13 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
   };
 
   const handleConnectPeer = async (peerId: string, peerName: string) => {
-    const isSeededDemoPeer = ['cand-ananya-02', 'cand-kabir-03', 'cand-meera-04'].includes(peerId);
-    if (isCloudAuthenticated && ownerKey !== 'sandbox-candidate' && !isSeededDemoPeer) {
+    if (!isGmailAuthenticated || ownerKey === 'sandbox-candidate') {
+      setComposerError('Only Gmail-signed-in accounts can initiate 1-on-1 study connections.');
+      return;
+    }
+    if (isBotAccountId(peerId)) return;
+
+    if (isCloudAuthenticated) {
       const cloudConn = await requestSocialConnectionInCloud({
         requesterId: ownerKey,
         requesterName: candidateName,
@@ -633,7 +838,8 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
   };
 
   const handleAcceptPendingRequest = async (conn: SocialConnection) => {
-    if (isCloudAuthenticated && ownerKey !== 'sandbox-candidate' && conn.id.startsWith('conn_')) {
+    if (!isGmailAuthenticated || ownerKey === 'sandbox-candidate') return;
+    if (isCloudAuthenticated && conn.id.startsWith('conn_')) {
       await acceptSocialConnectionInCloud({
         connectionId: conn.id,
         recipientAvatarUrl: avatarUrl,
@@ -803,13 +1009,37 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
           </div>
 
           <div className="text-xs text-slate-600 sm:text-right space-y-0.5">
-            <p className="font-semibold text-slate-900">{candidateName}</p>
+            <div className="flex flex-wrap items-center sm:justify-end gap-1.5">
+              <p className="font-semibold text-slate-900">{candidateName}</p>
+              {renderPostRoleTag(currentUserRoleBadge)}
+            </div>
             <p className="text-[11px] text-slate-500">
               {xpSnapshot.netXp} XP · {xpSnapshot.rarity.tier}
+              {userEmail ? ` · ${userEmail}` : ''}
             </p>
           </div>
         </div>
       </section>
+
+      {!isGmailAuthenticated && (
+        <section
+          role="status"
+          data-testid="social-gmail-only-notice"
+          className="rounded-xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-xs text-amber-950 flex items-start gap-2.5"
+        >
+          <ShieldCheck className="h-4 w-4 text-amber-700 shrink-0 mt-0.5" />
+          <div className="space-y-0.5">
+            <p className="font-semibold">
+              Verified Gmail Sign-In Required for Social SyllabiQ
+            </p>
+            <p className="text-amber-900/90 leading-relaxed">
+              Only accounts signed in with Google (<span className="font-mono">@gmail.com</span>)
+              appear in the Scholars Directory and can post in World or 1-on-1 chats. Posts made
+              by a Teacher, Delegated Team Admin, or Super Admin always show their role label.
+            </p>
+          </div>
+        </section>
+      )}
 
       {/* Header: Direct to World / 1-on-1 Private Switch + Photo Visibility Policy */}
       <section className="glass-panel rounded-2xl p-6 space-y-4">
@@ -818,7 +1048,7 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
             <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
               <span className="font-semibold text-sky-700">Social SyllabiQ</span>
               <span aria-hidden="true">·</span>
-              <span>Direct to World Communication</span>
+              <span>Gmail-Verified Accounts Only</span>
               <span aria-hidden="true">·</span>
               <span>1-on-1 Private Conversations</span>
               <span aria-hidden="true">·</span>
@@ -836,9 +1066,10 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
               Scholarly World Stream &amp; 1-on-1 Private Study Vaults
             </h2>
             <p className="text-xs text-slate-600 max-w-2xl leading-relaxed">
-              Only scholar names and verified FlexCards appear in chat—no external photos, links,
-              or spam. Search any scholar using their unique Profile ID in World to start a direct
-              1-on-1 private conversation and exchange granular credential vault permissions.
+              Only Gmail-verified accounts and verified FlexCards appear in chat—zero bot accounts,
+              links, or spam. Posts by Teachers, Delegated Team Admins, and Super Admins are clearly
+              labeled. Search any account using its unique Profile ID in World to start a direct
+              1-on-1 conversation.
             </p>
           </div>
 
@@ -860,7 +1091,7 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
                 }`}
               >
                 <Globe className="h-3.5 w-3.5" />
-                <span>World ({messages.filter((m) => m.channelType === 'world').length})</span>
+                <span>World ({worldMessagesCount})</span>
               </button>
 
               <button
@@ -976,12 +1207,10 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
                 </div>
 
                 {/* Quick-Test Search Chips */}
-                <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                  <span className="text-slate-400">Quick Test:</span>
-                  {directory
-                    .filter((d) => d.userId !== ownerKey && d.userId !== 'cand-aarav-01')
-                    .slice(0, 3)
-                    .map((peer) => {
+                {(otherGmailScholars.length > 0 || isGmailAuthenticated) && (
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <span className="text-slate-400">Quick Filter:</span>
+                    {otherGmailScholars.slice(0, 3).map((peer) => {
                       const peerPid = peer.profileId || generateScholarProfileId(peer.userId);
                       return (
                         <button
@@ -994,14 +1223,17 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
                         </button>
                       );
                     })}
-                  <button
-                    type="button"
-                    onClick={() => setProfileIdSearch(myProfileId)}
-                    className="rounded-md bg-sky-50 hover:bg-sky-100 px-2 py-0.5 text-sky-700 font-mono transition-colors"
-                  >
-                    My ID
-                  </button>
-                </div>
+                    {isGmailAuthenticated && (
+                      <button
+                        type="button"
+                        onClick={() => setProfileIdSearch(myProfileId)}
+                        className="rounded-md bg-sky-50 hover:bg-sky-100 px-2 py-0.5 text-sky-700 font-mono transition-colors"
+                      >
+                        My ID
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Search Results Card */}
@@ -1018,7 +1250,7 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
 
                   {matchedScholars.length === 0 ? (
                     <p className="text-xs text-slate-500 py-1">
-                      No scholar found matching ID &ldquo;{profileIdSearch.trim()}&rdquo;. Ask the scholar to copy their exact Profile ID banner from Social SyllabiQ.
+                      No Gmail-signed-in scholar found matching ID &ldquo;{profileIdSearch.trim()}&rdquo;. Ask the person to sign in with Gmail and share their exact Profile ID.
                     </p>
                   ) : (
                     <div className="space-y-2">
@@ -1050,8 +1282,9 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
                                 visibility: peer.avatarVisibility,
                               })}
                               <div className="min-w-0 space-y-0.5">
-                                <p className="text-xs font-bold text-slate-900 truncate flex items-center gap-1.5">
+                                <p className="text-xs font-bold text-slate-900 truncate flex flex-wrap items-center gap-1.5">
                                   <span>{peer.displayName}</span>
+                                  {renderPostRoleTag(peer.roleBadge)}
                                   {isMe && (
                                     <span className="text-[10px] text-sky-700 bg-sky-50 px-1.5 py-0.2 rounded font-semibold">
                                       You
@@ -1114,19 +1347,25 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
                 </div>
               )}
 
-              {/* All Active Scholars List */}
+              {/* All Active Gmail Accounts List */}
               <div className="space-y-2 pt-2 border-t border-slate-200">
                 <div className="flex items-center justify-between text-xs">
                   <h4 className="font-bold text-slate-900">
-                    Scholars Directory ({directory.filter((d) => d.userId !== ownerKey && d.userId !== 'cand-aarav-01').length})
+                    Scholars Directory ({otherGmailScholars.length})
                   </h4>
-                  <span className="text-[11px] text-slate-500">1-on-1 Connect</span>
+                  <span className="text-[11px] text-slate-500">Gmail-Only · 1-on-1</span>
                 </div>
 
-                <div className="divide-y divide-slate-100">
-                  {directory
-                    .filter((d) => d.userId !== ownerKey && d.userId !== 'cand-aarav-01')
-                    .map((peer) => {
+                {otherGmailScholars.length === 0 ? (
+                  <p
+                    data-testid="empty-gmail-directory"
+                    className="text-xs text-slate-500 py-3 leading-relaxed"
+                  >
+                    No other Gmail-signed-in accounts online yet.
+                  </p>
+                ) : (
+                  <div className="divide-y divide-slate-100">
+                    {otherGmailScholars.map((peer) => {
                       const peerPid = peer.profileId || generateScholarProfileId(peer.userId);
                       const existingConn = myConnections.find(
                         (c) =>
@@ -1153,8 +1392,9 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
                               visibility: peer.avatarVisibility,
                             })}
                             <div className="min-w-0 space-y-0.5">
-                              <p className="text-xs font-bold text-slate-900 truncate">
-                                {peer.displayName}
+                              <p className="text-xs font-bold text-slate-900 truncate flex flex-wrap items-center gap-1.5">
+                                <span>{peer.displayName}</span>
+                                {renderPostRoleTag(peer.roleBadge)}
                               </p>
                               <p className="font-mono text-[10px] text-sky-700 bg-sky-50 px-1.5 py-0.2 rounded inline-block truncate">
                                 {peerPid}
@@ -1196,8 +1436,9 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
                           ) : (
                             <button
                               type="button"
+                              disabled={!isGmailAuthenticated}
                               onClick={() => handleConnectPeer(peer.userId, peer.displayName)}
-                              className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 whitespace-nowrap shrink-0"
+                              className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap shrink-0"
                             >
                               <UserPlus className="h-3.5 w-3.5 text-sky-400" />
                               <span>Join</span>
@@ -1206,7 +1447,8 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
                         </div>
                       );
                     })}
-                </div>
+                  </div>
+                )}
               </div>
             </section>
           ) : (
@@ -1217,24 +1459,28 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
                   <p className="text-xs font-bold text-amber-950">
                     Pending Join Requests ({incomingPendingRequests.length})
                   </p>
-                  {incomingPendingRequests.map((req) => (
-                    <div
-                      key={req.id}
-                      className="flex items-center justify-between gap-2 text-xs"
-                    >
-                      <span className="font-semibold text-slate-900 truncate">
-                        {req.requesterName}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => handleAcceptPendingRequest(req)}
-                        className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 whitespace-nowrap shrink-0"
+                  {incomingPendingRequests.map((req) => {
+                    const reqDir = gmailDirectory.find((d) => d.userId === req.requesterId);
+                    return (
+                      <div
+                        key={req.id}
+                        className="flex items-center justify-between gap-2 text-xs"
                       >
-                        <Check className="h-3.5 w-3.5 text-emerald-400" />
-                        <span>Accept &amp; Join</span>
-                      </button>
-                    </div>
-                  ))}
+                        <span className="font-semibold text-slate-900 truncate flex items-center gap-1.5">
+                          <span>{req.requesterName}</span>
+                          {renderPostRoleTag(reqDir?.roleBadge)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleAcceptPendingRequest(req)}
+                          className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 whitespace-nowrap shrink-0"
+                        >
+                          <Check className="h-3.5 w-3.5 text-emerald-400" />
+                          <span>Accept &amp; Join</span>
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 
@@ -1280,7 +1526,10 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
                             sizeClass: 'h-8 w-8',
                           })}
                           <div className="min-w-0 flex-1 space-y-0.5">
-                            <p className="text-xs font-semibold truncate">{peer.peerName}</p>
+                            <p className="text-xs font-semibold truncate flex items-center gap-1.5">
+                              <span>{peer.peerName}</span>
+                              {renderPostRoleTag(peer.roleBadge, active)}
+                            </p>
                             <p
                               className={`font-mono text-[10px] truncate ${
                                 active ? 'text-sky-300' : 'text-sky-700'
@@ -1313,9 +1562,11 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
               <>
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
                   <div>
-                    <h3 className="font-display text-lg font-bold text-slate-900 flex items-center gap-2">
+                    <h3 className="font-display text-lg font-bold text-slate-900 flex flex-wrap items-center gap-2">
                       <MessageSquare className="h-4 w-4 text-sky-600 shrink-0" />
                       <span>{activeChannelMeta.title}</span>
+                      {activeChannelMeta.peer?.roleBadge &&
+                        renderPostRoleTag(activeChannelMeta.peer.roleBadge)}
                     </h3>
                     <p className="text-xs text-slate-500">{activeChannelMeta.subtitle}</p>
                   </div>
@@ -1335,12 +1586,24 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
                   className="max-h-[420px] overflow-y-auto space-y-3 pr-1"
                 >
                   {visibleChannelMessages.length === 0 ? (
-                    <div className="py-10 text-center text-xs text-slate-500">
-                      No messages in <strong>{activeChannelMeta.title}</strong> yet. Share a study check-in or attach one of your verified FlexCards below.
+                    <div
+                      data-testid="empty-world-stream"
+                      className="py-10 text-center text-xs text-slate-500"
+                    >
+                      No messages in <strong>{activeChannelMeta.title}</strong> yet.{' '}
+                      {isGmailAuthenticated
+                        ? 'Share a study check-in or attach one of your verified FlexCards below.'
+                        : 'Sign in with Gmail to start the conversation.'}
                     </div>
                   ) : (
                     visibleChannelMessages.map((msg) => {
                       const isMine = msg.senderId === ownerKey;
+                      const senderDir = gmailDirectory.find((d) => d.userId === msg.senderId);
+                      const resolvedRoleBadge = formatPostRoleLabel(
+                        msg.senderRoleBadge ||
+                          senderDir?.roleBadge ||
+                          (isMine ? currentUserRoleBadge : undefined)
+                      );
                       return (
                         <article
                           key={msg.id}
@@ -1361,12 +1624,13 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
                                   : msg.senderAvatarVisibility,
                                 sizeClass: 'h-8 w-8',
                               })}
-                              <div className="min-w-0">
+                              <div className="min-w-0 flex flex-wrap items-center gap-1.5">
                                 <span className="text-xs font-bold text-slate-900">
                                   {msg.senderName}
                                 </span>
+                                {renderPostRoleTag(resolvedRoleBadge)}
                                 {isMine && (
-                                  <span className="ml-1.5 text-[11px] text-sky-700 font-medium">
+                                  <span className="text-[11px] text-sky-700 font-medium">
                                     · You
                                   </span>
                                 )}
@@ -1378,7 +1642,7 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
                                 {msg.createdAt.slice(11, 16) || msg.createdAt.slice(0, 10)}
                               </span>
                               {!isMine &&
-                                msg.senderId !== 'cand-aarav-01' &&
+                                isGmailAuthenticated &&
                                 !connectedPeerIds.has(msg.senderId) && (
                                   <button
                                     type="button"
@@ -1468,13 +1732,18 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
                         id="social-message-input"
                         type="text"
                         maxLength={500}
+                        disabled={!isGmailAuthenticated || sendingMsg}
                         value={draftText}
                         onChange={(e) => {
                           setDraftText(e.target.value);
                           if (composerError) setComposerError('');
                         }}
-                        placeholder={`Message ${activeChannelMeta.title} (names & FlexCards only — no external photos or links)...`}
-                        className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-sky-600 focus:outline-hidden"
+                        placeholder={
+                          isGmailAuthenticated
+                            ? `Message ${activeChannelMeta.title} (names & FlexCards only — no external photos or links)...`
+                            : 'Sign in with a verified @gmail.com account to post in Social SyllabiQ...'
+                        }
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-sky-600 focus:outline-hidden disabled:bg-slate-50 disabled:text-slate-500"
                       />
                     </div>
 
@@ -1484,9 +1753,10 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
                       </label>
                       <select
                         id="social-flexcard-select"
+                        disabled={!isGmailAuthenticated || sendingMsg}
                         value={selectedFlexSerial}
                         onChange={(e) => setSelectedFlexSerial(e.target.value)}
-                        className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-2.5 py-2.5 text-xs text-slate-800 focus:border-sky-600 focus:outline-hidden"
+                        className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-2.5 py-2.5 text-xs text-slate-800 focus:border-sky-600 focus:outline-hidden disabled:bg-slate-50 disabled:text-slate-500"
                       >
                         <option value="">No FlexCard attached</option>
                         {issuedFlexCards.map((fc) => (
@@ -1498,7 +1768,8 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
 
                       <button
                         type="submit"
-                        disabled={sendingMsg}
+                        data-testid="social-post-submit"
+                        disabled={!isGmailAuthenticated || sendingMsg}
                         className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap shrink-0"
                       >
                         <Send className="h-3.5 w-3.5 text-sky-400" />

@@ -105,10 +105,14 @@ import {
   DEMO_PLACEHOLDER_EMAIL,
   emailToInviteKey,
   filterCandidatePiiForStaff,
+  formatPostRoleLabel,
+  isBotAccountId,
   isDemoPlaceholderStudentName,
+  isGmailEmail,
   isSuperAdminCandidateRecord,
   isSuperAdminEmail,
   resolveAuthenticatedDisplayName,
+  resolvePostRoleBadge,
   resolveSandboxStaffAccess,
   type SandboxRolePreviewMode,
 } from './utils/firestoreValidators';
@@ -955,6 +959,7 @@ export default function App() {
     lastActiveDate?: string;
     avatarUrl?: string;
     avatarVisibility?: AvatarVisibility;
+    accountRole?: 'student' | 'teacher';
   }) => {
     const nextStudent: StudentProfile = {
       ...appState.student,
@@ -973,6 +978,7 @@ export default function App() {
       ...(patch.avatarVisibility !== undefined
         ? { avatarVisibility: patch.avatarVisibility }
         : {}),
+      ...(patch.accountRole !== undefined ? { accountRole: patch.accountRole } : {}),
     };
 
     const { achievements: nextAchievements } = evaluateAchievements(
@@ -997,10 +1003,10 @@ export default function App() {
       state: nextStateSnapshot,
       bonusPoints: account
         ? cloudSummary?.bonusPoints ?? 0
-        : sandboxCandidates[0]?.bonusPoints ?? 150,
+        : 0,
       deductedPoints: account
         ? cloudSummary?.deductedPoints ?? 0
-        : sandboxCandidates[0]?.deductedPoints ?? 0,
+        : 0,
       recoveredEthicsXp: nextStudent.recoveredEthicsXp ?? 0,
     });
 
@@ -1022,6 +1028,7 @@ export default function App() {
         ...(patch.avatarVisibility !== undefined
           ? { avatarVisibility: patch.avatarVisibility }
           : {}),
+        ...(patch.accountRole !== undefined ? { accountRole: patch.accountRole } : {}),
       };
 
       const { achievements } = evaluateAchievements(
@@ -1043,48 +1050,30 @@ export default function App() {
       };
     });
 
-    if (!account) {
-      const weak = identifyNeededStudyTopics(nextStateSnapshot.topics, 4);
-      setSandboxCandidates((candPrev) =>
-        candPrev.map((c, idx) =>
-          idx === 0
-            ? {
-                ...c,
-                displayName: nextStudent.name || c.displayName,
-                email: nextStudent.email || c.email,
-                contactEmail: nextStudent.email || c.contactEmail,
-                phoneNumber: nextStudent.phoneNumber ?? c.phoneNumber,
-                notifyGmailOptIn: nextStudent.notifyGmailOptIn ?? c.notifyGmailOptIn,
-                notifyWhatsappOptIn:
-                  nextStudent.notifyWhatsappOptIn ?? c.notifyWhatsappOptIn,
-                xpPoints: snap.netXp,
-                flexTier: snap.rarity.tier,
-                lastActiveDate: nextStudent.lastActiveDate,
-                inactiveDays: snap.inactiveDays,
-                activeLearnerActive: !snap.activeLearnerDissolved,
-                unlockedBadges: nextAchievements.filter((a) => a.unlocked).map((a) => a.title),
-                weakTopics: weak,
-                avatarUrl: nextStudent.avatarUrl || undefined,
-              }
-            : c
-        )
-      );
-    }
-
-    if (patch.avatarUrl !== undefined || patch.avatarVisibility !== undefined) {
-      const resolvedOwnerKey = account ? account.uid : 'sandbox-candidate';
-      const resolvedAvatarUrl =
-        nextStudent.avatarUrl || account?.photoURL || defaultAvatarImg;
-      const profilePayload = {
-        userId: resolvedOwnerKey,
-        profileId: generateScholarProfileId(resolvedOwnerKey),
-        displayName: nextStudent.name || account?.displayName || 'Scholar',
-        avatarUrl: resolvedAvatarUrl,
-        avatarVisibility: nextStudent.avatarVisibility ?? 'world',
-        flexTier: snap.rarity.tier,
-      };
-      void updateSocialProfileVisibilityApi(profilePayload);
-      if (account?.emailVerified) {
+    if (
+      patch.avatarUrl !== undefined ||
+      patch.avatarVisibility !== undefined ||
+      patch.accountRole !== undefined
+    ) {
+      const isViewerGmail = Boolean(account?.emailVerified && isGmailEmail(account.email));
+      if (isViewerGmail && account) {
+        const resolvedAvatarUrl =
+          nextStudent.avatarUrl || account.photoURL || defaultAvatarImg;
+        const resolvedRoleBadge = resolvePostRoleBadge({
+          staffTier: effectiveStaffAccess.tier,
+          accountRole: nextStudent.accountRole,
+        });
+        const profilePayload = {
+          userId: account.uid,
+          profileId: generateScholarProfileId(account.uid),
+          displayName: nextStudent.name || account.displayName || 'Scholar',
+          avatarUrl: resolvedAvatarUrl,
+          avatarVisibility: nextStudent.avatarVisibility ?? 'world',
+          flexTier: snap.rarity.tier,
+          isGmailAccount: true,
+          roleBadge: resolvedRoleBadge,
+        };
+        void updateSocialProfileVisibilityApi(profilePayload);
         void upsertSocialProfileInCloud(profilePayload);
       }
     }
@@ -1297,7 +1286,7 @@ export default function App() {
     xpSnapshot.rarity.tier,
   ]);
 
-  // Register pre-login showcase & demo seed serials once on app boot
+  // Register pre-login showcase serials once on app boot (never added to user rosters)
   useEffect(() => {
     const todayISO = getTodayDateISO();
     const showcaseDefaults: IssuedCredentialDoc[] = [
@@ -1305,7 +1294,7 @@ export default function App() {
         credentialCode: generateFlexCardSerial('sandbox-candidate', 'SCHOLAR_FLEX'),
         kind: 'flexcard',
         ownerUid: 'sandbox-candidate',
-        ownerName: 'Aarav Sharma',
+        ownerName: 'Verified Scholar',
         boardOrUniversity: 'CBSE Class 12 · Engineering Entrance Prep',
         examName: 'Spring Term Finals & Entrance Prep',
         title: 'Consistent PYQ Scholar',
@@ -1318,7 +1307,7 @@ export default function App() {
         credentialCode: generateFlexCardSerial('sandbox-candidate', 'PYQ_CRUSHER'),
         kind: 'flexcard',
         ownerUid: 'sandbox-candidate',
-        ownerName: 'Aarav Sharma',
+        ownerName: 'Verified Scholar',
         boardOrUniversity: 'CBSE Class 12 · Engineering Entrance Prep',
         examName: 'Spring Term Finals & Entrance Prep',
         title: 'High-Yield PYQ Crusher',
@@ -1331,10 +1320,10 @@ export default function App() {
         credentialCode: generateReportCardSerial('sandbox-candidate', 'ALL'),
         kind: 'report_card',
         ownerUid: 'sandbox-candidate',
-        ownerName: 'Aarav Sharma',
+        ownerName: 'Verified Scholar',
         boardOrUniversity: 'CBSE Class 12 · Engineering Entrance Prep',
         examName: 'Spring Term Finals & Entrance Prep',
-        title: 'Aarav Sharma — Official SyllabiQ Report Card',
+        title: 'Verified Scholar — Official SyllabiQ Report Card',
         subtitleOrMetric: 'Verified Subject Mastery & PYQ Readiness Dossier',
         xpPoints: 850,
         flexTier: 'Mythic Sovereign',
@@ -1348,7 +1337,7 @@ export default function App() {
         credentialCode: generateFlexCardSerial('sandbox-candidate', ach.code || ach.id),
         kind: 'flexcard' as const,
         ownerUid: 'sandbox-candidate',
-        ownerName: 'Aarav Mehta',
+        ownerName: 'Demo Scholar',
         boardOrUniversity: 'Delhi Technological University (DTU)',
         examName: 'B.Tech Sem-IV End-Term Finals',
         title: ach.title,
@@ -1379,7 +1368,7 @@ export default function App() {
 
   // Keep candidate's verification notices hydrated from server registry
   useEffect(() => {
-    const targetIds = account ? [account.uid] : ['sandbox-candidate', 'cand-aarav-01'];
+    const targetIds = account ? [account.uid] : ['sandbox-candidate'];
     void fetchCredentialNotificationsApi(targetIds).then((notices) => {
       if (notices.length === 0) return;
       setVerificationNotices((prev) => {
@@ -1457,11 +1446,19 @@ export default function App() {
     category: GlobalUpdateCategory;
     pinned: boolean;
   }) => {
+    const canonicalRole =
+      formatPostRoleLabel(effectiveStaffAccess.roleLabel) ||
+      (effectiveStaffAccess.tier === 'super_admin'
+        ? 'Super Admin'
+        : effectiveStaffAccess.tier === 'sub_admin'
+        ? 'Delegated Team Admin'
+        : effectiveStaffAccess.roleLabel);
+
     if (account) {
       await publishGlobalUpdateInCloud({
         authorUid: account.uid,
         authorName: account.displayName,
-        authorRoleLabel: effectiveStaffAccess.roleLabel,
+        authorRoleLabel: canonicalRole,
         ...payload,
       });
       return;
@@ -1471,8 +1468,8 @@ export default function App() {
     const newDoc: GlobalUpdateDoc = {
       id: `sandbox_upd_${Date.now()}`,
       authorUid: 'sandbox_staff',
-      authorName: effectiveStaffAccess.roleLabel,
-      authorRoleLabel: effectiveStaffAccess.roleLabel,
+      authorName: canonicalRole,
+      authorRoleLabel: canonicalRole,
       title: payload.title,
       body: payload.body,
       category: payload.category,
@@ -1553,11 +1550,18 @@ export default function App() {
     pointsAwarded: number;
     message: string;
   }) => {
+    const canonicalRole =
+      formatPostRoleLabel(effectiveStaffAccess.roleLabel) ||
+      (effectiveStaffAccess.tier === 'super_admin'
+        ? 'Super Admin'
+        : 'Delegated Team Admin');
+
     if (account) {
       await grantIndividualBonusInCloud({
         targetCandidate: payload.targetCandidate,
         grantedByUid: account.uid,
         grantedByName: account.displayName,
+        grantedByRoleLabel: canonicalRole,
         bonusTitle: payload.bonusTitle,
         bonusType: payload.bonusType,
         pointsAwarded: payload.pointsAwarded,
@@ -1573,7 +1577,8 @@ export default function App() {
       targetUserId: payload.targetCandidate.ownerUid,
       targetName: payload.targetCandidate.displayName,
       grantedByUid: 'sandbox_staff',
-      grantedByName: effectiveStaffAccess.roleLabel,
+      grantedByName: canonicalRole,
+      grantedByRoleLabel: canonicalRole,
       bonusTitle: payload.bonusTitle,
       bonusType: payload.bonusType,
       pointsAwarded: payload.pointsAwarded,
@@ -1737,10 +1742,28 @@ export default function App() {
     }
   };
 
-  const sandboxBannedCandidate =
-    sandboxCandidates.find((c) => c.ownerUid === 'cand-banned-04') ||
-    sandboxCandidates.find((c) => c.banned) ||
-    null;
+  const sandboxBannedPreviewDoc: CandidateSummaryDoc = {
+    ownerUid: 'sandbox-banned-preview',
+    displayName: 'Suspended Sandbox Scholar',
+    email: 'sandbox.suspended@gmail.com',
+    contactEmail: 'sandbox.suspended@gmail.com',
+    boardOrUniversity: 'NSUT New Delhi',
+    examName: 'B.Tech Sem-V Algorithms & Computer Networks Finals',
+    examDate: getTodayDateISO(),
+    readinessPercent: 68,
+    overallRatingOutOf10: 8.1,
+    completedChapters: 5,
+    totalChapters: 9,
+    attemptsCount: 4,
+    focusMinutesLogged: 60,
+    bonusPoints: 50,
+    deductedPoints: 120,
+    xpPoints: 740,
+    flexTier: 'Rare Sapphire',
+    banned: true,
+    banReason:
+      'Repeated external tab-switching during a timed PYQ Speed Drill and sharing an unauthorized external link in Social SyllabiQ World chat.',
+  };
 
   // Immediate lock screen if signed-in non-Super-Admin candidate account is suspended OR Banned Flex Sandbox is active
   if (account && cloudSummary?.banned && effectiveStaffAccess.tier !== 'super_admin') {
@@ -1763,18 +1786,18 @@ export default function App() {
     );
   }
 
-  if (!account && sandboxBannedPreview && sandboxBannedCandidate?.banned) {
+  if (!account && sandboxBannedPreview) {
     return (
       <>
         <BannedAccountScreen
           account={{
-            uid: sandboxBannedCandidate.ownerUid,
-            email: sandboxBannedCandidate.email || 'rohan.verma.student@gmail.com',
-            displayName: sandboxBannedCandidate.displayName,
+            uid: sandboxBannedPreviewDoc.ownerUid,
+            email: sandboxBannedPreviewDoc.email || 'sandbox.suspended@gmail.com',
+            displayName: sandboxBannedPreviewDoc.displayName,
             emailVerified: true,
             providerId: 'google.com',
           }}
-          summary={sandboxBannedCandidate}
+          summary={sandboxBannedPreviewDoc}
           isSandboxPreview={true}
           onExitSandboxPreview={() => {
             setSandboxBannedPreview(false);
@@ -2167,6 +2190,12 @@ export default function App() {
               state={appState}
               ownerKey={ownerKey}
               isCloudAuthenticated={Boolean(account?.emailVerified)}
+              isGmailAuthenticated={Boolean(account?.emailVerified && isGmailEmail(account.email))}
+              userEmail={account?.email}
+              currentUserRoleBadge={resolvePostRoleBadge({
+                staffTier: effectiveStaffAccess.tier,
+                accountRole: appState.student.accountRole,
+              })}
               avatarUrl={sidebarAvatarSrc}
               xpSnapshot={xpSnapshot}
               staleSubjects={staleSubjects}
@@ -2225,7 +2254,9 @@ export default function App() {
                     !isSuperAdminCandidateRecord(
                       c,
                       effectiveStaffAccess.tier === 'super_admin' ? account?.uid : undefined
-                    )
+                    ) &&
+                    !isBotAccountId(c.ownerUid) &&
+                    isGmailEmail(c.email || c.contactEmail)
                 ),
                 effectiveStaffAccess.canSendOutreach
               )}
@@ -2322,10 +2353,7 @@ export default function App() {
         defaultVerifierName={account?.displayName || ''}
         defaultVerifierGmail={account?.email || ''}
         onVerifiedNoticeGenerated={(notice) => {
-          if (
-            notice.targetUserId === ownerKey ||
-            (!account && notice.targetUserId === 'cand-aarav-01')
-          ) {
+          if (notice.targetUserId === ownerKey) {
             setVerificationNotices((prev) => [
               notice,
               ...prev.filter((n) => n.id !== notice.id),

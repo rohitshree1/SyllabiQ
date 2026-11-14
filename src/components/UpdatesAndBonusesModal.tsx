@@ -16,7 +16,10 @@ import type {
   GlobalUpdateDoc,
   IndividualBonusDoc,
 } from '../types';
-import { formatVerifierPostLabel } from '../utils/verificationAndReferral';
+import {
+  formatPostRoleLabel,
+  formatVerifierPostLabel,
+} from '../utils/verificationAndReferral';
 import { calculateEthicsRecoveryXp } from '../utils/skillRefreshAndEthics';
 
 interface UpdatesAndBonusesModalProps {
@@ -208,7 +211,10 @@ export const UpdatesAndBonusesModal: React.FC<UpdatesAndBonusesModalProps> = ({
                         </span>
                         <span aria-hidden="true">·</span>
                         <span>
-                          {upd.authorName} ({upd.authorRoleLabel})
+                          {upd.authorName} ·{' '}
+                          <strong className="font-semibold text-sky-800">
+                            {formatPostRoleLabel(upd.authorRoleLabel) || upd.authorRoleLabel}
+                          </strong>
                         </span>
                       </div>
                       <span className="font-mono tabular-nums text-[11px]">
@@ -257,7 +263,18 @@ export const UpdatesAndBonusesModal: React.FC<UpdatesAndBonusesModalProps> = ({
                             {BONUS_TYPE_LABELS[bon.bonusType]}
                           </span>
                           <span aria-hidden="true">·</span>
-                          <span>By {bon.grantedByName}</span>
+                          <span>
+                            By {bon.grantedByName}
+                            {(formatPostRoleLabel(bon.grantedByRoleLabel) || bon.grantedByRoleLabel) && (
+                              <>
+                                {' · '}
+                                <strong className="font-semibold text-sky-800">
+                                  {formatPostRoleLabel(bon.grantedByRoleLabel) ||
+                                    bon.grantedByRoleLabel}
+                                </strong>
+                              </>
+                            )}
+                          </span>
                           <span aria-hidden="true">·</span>
                           <span className="font-mono tabular-nums">
                             {bon.createdAt.slice(0, 10)}

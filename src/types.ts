@@ -22,6 +22,8 @@ export type CredentialKind = 'flexcard' | 'report_card';
 
 export type AvatarVisibility = 'world' | 'connections_only';
 
+export type PostRoleBadge = 'Super Admin' | 'Delegated Team Admin' | 'Teacher';
+
 export interface IssuedCredentialDoc {
   credentialCode: string;
   kind: CredentialKind;
@@ -143,6 +145,8 @@ export interface SocialChatMessage {
   senderName: string;
   senderAvatarUrl?: string;
   senderAvatarVisibility: AvatarVisibility;
+  senderIsGmailAccount?: boolean;
+  senderRoleBadge?: PostRoleBadge;
   text: string;
   flexCard?: SocialFlexAttachment;
   createdAt: string;
@@ -184,12 +188,15 @@ export interface SocialDirectoryPeer {
   avatarUrl?: string;
   avatarVisibility: AvatarVisibility;
   flexTier: FlexCardRarityTier;
+  isGmailAccount?: boolean;
+  roleBadge?: PostRoleBadge;
   online: boolean;
 }
 
 export interface StudentProfile {
   name: string;
   profileId?: string;
+  accountRole?: 'student' | 'teacher';
   avatarUrl?: string;
   avatarVisibility?: AvatarVisibility;
   email?: string;
@@ -495,6 +502,7 @@ export interface IndividualBonusDoc {
   targetName: string;
   grantedByUid: string;
   grantedByName: string;
+  grantedByRoleLabel?: string;
   bonusTitle: string;
   bonusType: IndividualBonusType;
   pointsAwarded: number;

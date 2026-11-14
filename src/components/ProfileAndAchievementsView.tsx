@@ -75,6 +75,7 @@ interface ProfileAndAchievementsViewProps {
     lastActiveDate?: string;
     avatarUrl?: string;
     avatarVisibility?: AvatarVisibility;
+    accountRole?: 'student' | 'teacher';
   }) => void;
 }
 
@@ -686,8 +687,16 @@ export const ProfileAndAchievementsView: React.FC<ProfileAndAchievementsViewProp
 
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                  <h2 className="font-display text-xl font-bold text-slate-900">
-                    {state.student.name}
+                  <h2 className="font-display text-xl font-bold text-slate-900 inline-flex items-center gap-2">
+                    <span>{state.student.name}</span>
+                    {state.student.accountRole === 'teacher' && (
+                      <span
+                        data-testid="profile-teacher-role-label"
+                        className="font-sans text-xs font-semibold text-indigo-700"
+                      >
+                        · Teacher
+                      </span>
+                    )}
                   </h2>
                   <button
                     type="button"
@@ -787,39 +796,76 @@ export const ProfileAndAchievementsView: React.FC<ProfileAndAchievementsViewProp
             </button>
 
             {onUpdateStudentContactAndActivity && (
-              <div
-                role="group"
-                aria-label="Social SyllabiQ profile photo visibility"
-                className="grid grid-cols-2 sm:inline-flex items-center gap-1 rounded-lg bg-slate-100 p-1 w-full sm:w-auto sm:ml-auto"
-              >
-                <button
-                  type="button"
-                  onClick={() =>
-                    onUpdateStudentContactAndActivity({ avatarVisibility: 'world' })
-                  }
-                  className={`inline-flex items-center justify-center gap-1.5 rounded-md px-2.5 sm:px-3 py-1.5 text-xs font-medium transition-colors sm:whitespace-nowrap ${
-                    avatarVisibility === 'world'
-                      ? 'bg-white text-slate-900 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
+              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto sm:ml-auto">
+                <div
+                  role="group"
+                  aria-label="Account role for World and community posts"
+                  className="inline-flex items-center gap-1 rounded-lg bg-slate-100 p-1"
                 >
-                  <Eye className="h-3.5 w-3.5 text-sky-600 shrink-0" />
-                  <span className="truncate">Photo: Everyone</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onUpdateStudentContactAndActivity({ avatarVisibility: 'connections_only' })
-                  }
-                  className={`inline-flex items-center justify-center gap-1.5 rounded-md px-2.5 sm:px-3 py-1.5 text-xs font-medium transition-colors sm:whitespace-nowrap ${
-                    avatarVisibility === 'connections_only'
-                      ? 'bg-white text-slate-900 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
+                  <button
+                    type="button"
+                    data-testid="role-toggle-student"
+                    onClick={() =>
+                      onUpdateStudentContactAndActivity({ accountRole: 'student' })
+                    }
+                    className={`inline-flex items-center justify-center rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
+                      (state.student.accountRole || 'student') === 'student'
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Student
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="role-toggle-teacher"
+                    onClick={() =>
+                      onUpdateStudentContactAndActivity({ accountRole: 'teacher' })
+                    }
+                    className={`inline-flex items-center justify-center rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
+                      state.student.accountRole === 'teacher'
+                        ? 'bg-white text-indigo-700 font-semibold shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Teacher
+                  </button>
+                </div>
+
+                <div
+                  role="group"
+                  aria-label="Social SyllabiQ profile photo visibility"
+                  className="grid grid-cols-2 sm:inline-flex items-center gap-1 rounded-lg bg-slate-100 p-1 w-full sm:w-auto"
                 >
-                  <EyeOff className="h-3.5 w-3.5 text-slate-600 shrink-0" />
-                  <span className="truncate">Photo: 1-on-1 Only</span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onUpdateStudentContactAndActivity({ avatarVisibility: 'world' })
+                    }
+                    className={`inline-flex items-center justify-center gap-1.5 rounded-md px-2.5 sm:px-3 py-1.5 text-xs font-medium transition-colors sm:whitespace-nowrap ${
+                      avatarVisibility === 'world'
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Eye className="h-3.5 w-3.5 text-sky-600 shrink-0" />
+                    <span className="truncate">Photo: Everyone</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onUpdateStudentContactAndActivity({ avatarVisibility: 'connections_only' })
+                    }
+                    className={`inline-flex items-center justify-center gap-1.5 rounded-md px-2.5 sm:px-3 py-1.5 text-xs font-medium transition-colors sm:whitespace-nowrap ${
+                      avatarVisibility === 'connections_only'
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <EyeOff className="h-3.5 w-3.5 text-slate-600 shrink-0" />
+                    <span className="truncate">Photo: 1-on-1 Only</span>
+                  </button>
+                </div>
               </div>
             )}
           </div>

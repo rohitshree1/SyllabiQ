@@ -39,6 +39,7 @@ import {
   resolveFlexRarityTier,
   validateAdminContactAssignment,
 } from '../utils/xpAndOutreachEngine';
+import { formatPostRoleLabel } from '../utils/verificationAndReferral';
 import type {
   CandidateSummaryDoc,
   GlobalUpdateCategory,
@@ -1540,7 +1541,12 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                         <span className="font-medium text-slate-800">{upd.category}</span>
                         <span aria-hidden="true">·</span>
                         <span>
-                          {upd.authorName} ({upd.authorRoleLabel})
+                          {upd.authorName}
+                          {(formatPostRoleLabel(upd.authorRoleLabel) || upd.authorRoleLabel) && (
+                            <span className="ml-1 font-semibold text-sky-800">
+                              · {formatPostRoleLabel(upd.authorRoleLabel) || upd.authorRoleLabel}
+                            </span>
+                          )}
                         </span>
                         <span aria-hidden="true">·</span>
                         <span className="font-mono tabular-nums">{upd.createdAt.slice(0, 10)}</span>

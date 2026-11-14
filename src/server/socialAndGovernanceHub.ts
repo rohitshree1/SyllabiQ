@@ -11,6 +11,7 @@ import type {
   EthicsRecoveryModule,
   FlexCardRarityTier,
   IssuedCredentialDoc,
+  PostRoleBadge,
   SocialChatMessage,
   SocialConnection,
   SocialDirectoryPeer,
@@ -25,9 +26,10 @@ import {
   validateSocialMessageConduct,
 } from '../utils/skillRefreshAndEthics.ts';
 import {
-  generateFlexCardSerial,
-  generateReportCardSerial,
+  formatPostRoleLabel,
   generateScholarProfileId,
+  isBotAccountId,
+  isBotDisplayName,
 } from '../utils/verificationAndReferral.ts';
 
 interface PersistedSocialState {
@@ -41,171 +43,84 @@ interface PersistedAppealsState {
   appeals: SuspensionAppealRecord[];
 }
 
+const LEGACY_BOT_RECORD_IDS = new Set([
+  'soc-msg-1',
+  'soc-msg-2',
+  'soc-msg-3',
+  'conn-ananya-sandbox',
+  'conn-meera-sandbox-pending',
+  'vault-ananya-to-sandbox',
+]);
+
 function buildStarterSocialState(): PersistedSocialState {
-  const now = '2026-10-29T08:15:00.000Z';
-  const ananyaFlexSerial = generateFlexCardSerial('cand-ananya-02', 'NINE_SOVEREIGN');
-  const ananyaBlitzSerial = generateFlexCardSerial('cand-ananya-02', 'BLITZ_SPEED');
-  const ananyaReportSerial = generateReportCardSerial('cand-ananya-02', 'ALL');
-  const kabirFlexSerial = generateFlexCardSerial('cand-kabir-03', 'SYLLABUS_ARCHITECT');
-
-  const ananyaFlex1: IssuedCredentialDoc = {
-    credentialCode: ananyaFlexSerial,
-    kind: 'flexcard',
-    ownerUid: 'cand-ananya-02',
-    ownerName: 'Ananya Verma',
-    boardOrUniversity: 'CBSE Class 12',
-    examName: 'Senior Secondary Board Physics & Math Finals',
-    title: '9+/10 Sovereign Distinction',
-    subtitleOrMetric: '9.4/10 Timed PYQ Rating · 91% Readiness',
-    xpPoints: 1940,
-    flexTier: 'Mythic Sovereign',
-    issuedDateISO: '2026-10-28',
+  return {
+    directory: {},
+    messages: [],
+    connections: [],
+    vaultGrants: [],
   };
+}
 
-  const ananyaFlex2: IssuedCredentialDoc = {
-    credentialCode: ananyaBlitzSerial,
-    kind: 'flexcard',
-    ownerUid: 'cand-ananya-02',
-    ownerName: 'Ananya Verma',
-    boardOrUniversity: 'CBSE Class 12',
-    examName: 'Senior Secondary Board Physics & Math Finals',
-    title: 'Countdown Blitz Sprinter',
-    subtitleOrMetric: 'Sub-85% Exam Clock · 100% Accuracy',
-    xpPoints: 1940,
-    flexTier: 'Mythic Sovereign',
-    issuedDateISO: '2026-10-28',
-  };
+function sanitizeLoadedServerSocialState(parsed: Partial<PersistedSocialState>): PersistedSocialState {
+  const cleanDirectory: Record<string, Omit<SocialDirectoryPeer, 'online'>> = {};
+  if (parsed.directory && typeof parsed.directory === 'object') {
+    for (const [uid, entry] of Object.entries(parsed.directory)) {
+      if (!entry || isBotAccountId(uid) || isBotAccountId(entry.userId) || isBotDisplayName(entry.displayName)) {
+        continue;
+      }
+      if (entry.isGmailAccount !== true) {
+        continue;
+      }
+      cleanDirectory[uid] = {
+        ...entry,
+        userId: entry.userId || uid,
+        profileId: entry.profileId || generateScholarProfileId(entry.userId || uid),
+        isGmailAccount: true,
+        roleBadge: formatPostRoleLabel(entry.roleBadge),
+      };
+    }
+  }
 
-  const ananyaReport: IssuedCredentialDoc = {
-    credentialCode: ananyaReportSerial,
-    kind: 'report_card',
-    ownerUid: 'cand-ananya-02',
-    ownerName: 'Ananya Verma',
-    boardOrUniversity: 'CBSE Class 12',
-    examName: 'Senior Secondary Board Physics & Math Finals',
-    title: 'Official SyllabiQ Assessment Report Card (All Subjects)',
-    subtitleOrMetric: 'Aggregate 9.4/10 · 9/11 Chapters Mastered',
-    xpPoints: 1940,
-    flexTier: 'Mythic Sovereign',
-    issuedDateISO: '2026-10-28',
-  };
+  const rawMsgs = Array.isArray(parsed.messages) ? parsed.messages : [];
+  const cleanMsgs = rawMsgs
+    .filter((m) => {
+      if (!m || LEGACY_BOT_RECORD_IDS.has(m.id)) return false;
+      if (m.channelType !== 'world' && m.channelType !== 'dm') return false;
+      if (isBotAccountId(m.senderId) || isBotDisplayName(m.senderName)) return false;
+      return m.senderIsGmailAccount === true;
+    })
+    .map((m) => ({
+      ...m,
+      senderIsGmailAccount: true,
+      senderRoleBadge: formatPostRoleLabel(m.senderRoleBadge),
+    }));
+
+  const rawConns = Array.isArray(parsed.connections) ? parsed.connections : [];
+  const cleanConns = rawConns.filter((c) => {
+    if (!c || LEGACY_BOT_RECORD_IDS.has(c.id)) return false;
+    if (
+      isBotAccountId(c.requesterId) ||
+      isBotAccountId(c.recipientId) ||
+      isBotDisplayName(c.requesterName) ||
+      isBotDisplayName(c.recipientName)
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  const rawGrants = Array.isArray(parsed.vaultGrants) ? parsed.vaultGrants : [];
+  const cleanGrants = rawGrants.filter((g) => {
+    if (!g || LEGACY_BOT_RECORD_IDS.has(g.id)) return false;
+    if (isBotAccountId(g.ownerId) || isBotAccountId(g.granteeId)) return false;
+    return true;
+  });
 
   return {
-    directory: {
-      'cand-ananya-02': {
-        userId: 'cand-ananya-02',
-        profileId: generateScholarProfileId('cand-ananya-02'),
-        displayName: 'Ananya Verma',
-        avatarVisibility: 'world',
-        flexTier: 'Mythic Sovereign',
-      },
-      'cand-kabir-03': {
-        userId: 'cand-kabir-03',
-        profileId: generateScholarProfileId('cand-kabir-03'),
-        displayName: 'Kabir Nair',
-        avatarVisibility: 'connections_only',
-        flexTier: 'Uncommon Emerald',
-      },
-      'cand-meera-04': {
-        userId: 'cand-meera-04',
-        profileId: generateScholarProfileId('cand-meera-04'),
-        displayName: 'Meera Krishnan',
-        avatarVisibility: 'connections_only',
-        flexTier: 'Rare Sapphire',
-      },
-    },
-    messages: [
-      {
-        id: 'soc-msg-1',
-        channelType: 'world',
-        channelId: 'world',
-        senderId: 'cand-ananya-02',
-        senderName: 'Ananya Verma',
-        senderAvatarVisibility: 'world',
-        text: 'Completed Wave Optics & Alternating Current PYQ drills in my 05:30 peak window. Sharing my Sovereign Distinction FlexCard—connect 1-on-1 to compare notes!',
-        flexCard: {
-          credentialCode: ananyaFlexSerial,
-          title: '9+/10 Sovereign Distinction',
-          metricBadge: '9.4 / 10 PYQ Rating',
-          xpPoints: 1940,
-          flexTier: 'Mythic Sovereign',
-          boardOrUniversity: 'CBSE Class 12',
-          examName: 'Senior Secondary Board Physics & Math Finals',
-          needsSkillRefresh: false,
-        },
-        createdAt: '2026-10-29T06:40:00.000Z',
-      },
-      {
-        id: 'soc-msg-2',
-        channelType: 'world',
-        channelId: 'world',
-        senderId: 'cand-kabir-03',
-        senderName: 'Kabir Nair',
-        senderAvatarVisibility: 'connections_only',
-        text: 'Back on daily schedule tackling Banker Algorithm & ARIES Recovery. Anyone studying Operating Systems can search my Profile ID or send a Join request to compare FlexCards.',
-        flexCard: {
-          credentialCode: kabirFlexSerial,
-          title: 'Syllabus Architect',
-          metricBadge: 'Roadmap Live',
-          xpPoints: 340,
-          flexTier: 'Uncommon Emerald',
-          boardOrUniversity: 'VIT Vellore',
-          examName: 'CS Core Operating Systems & DBMS CAT-2',
-          needsSkillRefresh: false,
-        },
-        createdAt: '2026-10-29T07:20:00.000Z',
-      },
-      {
-        id: 'soc-msg-3',
-        channelType: 'dm',
-        channelId: 'dm::cand-ananya-02::sandbox-candidate',
-        senderId: 'cand-ananya-02',
-        senderName: 'Ananya Verma',
-        senderAvatarVisibility: 'world',
-        text: 'Hey Aarav! Morning check-in: let’s hit at least one compressed-timer PYQ set today before evening revision.',
-        createdAt: '2026-10-29T07:50:00.000Z',
-      },
-    ],
-    connections: [
-      {
-        id: 'conn-ananya-sandbox',
-        requesterId: 'cand-ananya-02',
-        requesterName: 'Ananya Verma',
-        requesterAvatarVisibility: 'world',
-        recipientId: 'sandbox-candidate',
-        recipientName: 'Aarav Mehta',
-        recipientAvatarVisibility: 'world',
-        status: 'connected',
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'conn-meera-sandbox-pending',
-        requesterId: 'cand-meera-04',
-        requesterName: 'Meera Krishnan',
-        requesterAvatarVisibility: 'connections_only',
-        recipientId: 'sandbox-candidate',
-        recipientName: 'Aarav Mehta',
-        recipientAvatarVisibility: 'world',
-        status: 'pending',
-        createdAt: now,
-        updatedAt: now,
-      },
-    ],
-    vaultGrants: [
-      {
-        id: 'vault-ananya-to-sandbox',
-        ownerId: 'cand-ananya-02',
-        ownerName: 'Ananya Verma',
-        granteeId: 'sandbox-candidate',
-        granteeName: 'Aarav Mehta',
-        scope: 'all_flexcards_and_report',
-        status: 'granted',
-        flexCardsSnapshot: [ananyaFlex1, ananyaFlex2],
-        reportCardSnapshot: ananyaReport,
-        updatedAt: now,
-      },
-    ],
+    directory: cleanDirectory,
+    messages: cleanMsgs,
+    connections: cleanConns,
+    vaultGrants: cleanGrants,
   };
 }
 
@@ -234,15 +149,7 @@ export function registerSocialAndGovernanceRoutes(params: {
     try {
       if (fs.existsSync(socialFile)) {
         const parsed = JSON.parse(fs.readFileSync(socialFile, 'utf-8')) as Partial<PersistedSocialState>;
-        const starter = buildStarterSocialState();
-        const rawMsgs = Array.isArray(parsed.messages) && parsed.messages.length > 0 ? parsed.messages : starter.messages;
-        const cleanMsgs = rawMsgs.filter((m) => m.channelType === 'world' || m.channelType === 'dm');
-        return {
-          messages: cleanMsgs.length > 0 ? cleanMsgs : starter.messages,
-          connections: Array.isArray(parsed.connections) ? parsed.connections : starter.connections,
-          vaultGrants: Array.isArray(parsed.vaultGrants) ? parsed.vaultGrants : starter.vaultGrants,
-          directory: { ...starter.directory, ...(parsed.directory || {}) },
-        };
+        return sanitizeLoadedServerSocialState(parsed);
       }
     } catch (err) {
       console.error('Failed loading social_state.json:', err);
@@ -300,11 +207,15 @@ export function registerSocialAndGovernanceRoutes(params: {
 
   const buildPublicDirectory = (social: PersistedSocialState): SocialDirectoryPeer[] => {
     const online = getOnlineUserIds();
-    return Object.values(social.directory).map((entry) => ({
-      ...entry,
-      profileId: entry.profileId || generateScholarProfileId(entry.userId),
-      online: online.has(entry.userId),
-    }));
+    return Object.values(social.directory)
+      .filter((entry) => entry.isGmailAccount === true && !isBotAccountId(entry.userId))
+      .map((entry) => ({
+        ...entry,
+        profileId: entry.profileId || generateScholarProfileId(entry.userId),
+        isGmailAccount: true,
+        roleBadge: formatPostRoleLabel(entry.roleBadge),
+        online: online.has(entry.userId),
+      }));
   };
 
   const broadcastWs = (event: string, payload: unknown) => {
@@ -354,8 +265,10 @@ export function registerSocialAndGovernanceRoutes(params: {
           const avatarVisibility: AvatarVisibility =
             parsed.payload.avatarVisibility === 'connections_only' ? 'connections_only' : 'world';
           const flexTier = (parsed.payload.flexTier as FlexCardRarityTier) || 'Common Slate';
+          const isGmailAccount = parsed.payload.isGmailAccount === true;
+          const roleBadge = formatPostRoleLabel(parsed.payload.roleBadge);
 
-          if (userId) {
+          if (userId && !isBotAccountId(userId) && isGmailAccount) {
             clientUsers.set(ws, userId);
             const social = loadSocial();
             social.directory[userId] = {
@@ -365,6 +278,8 @@ export function registerSocialAndGovernanceRoutes(params: {
               avatarUrl,
               avatarVisibility,
               flexTier,
+              isGmailAccount: true,
+              ...(roleBadge ? { roleBadge } : {}),
             };
             saveSocial(social);
             broadcastWs('social:presence:updated', {
@@ -401,23 +316,47 @@ export function registerSocialAndGovernanceRoutes(params: {
   });
 
   app.post('/api/social/profile-visibility', (req: Request, res: Response) => {
-    const { userId, displayName, avatarUrl, avatarVisibility, flexTier } = req.body as {
+    const {
+      userId,
+      displayName,
+      avatarUrl,
+      avatarVisibility,
+      flexTier,
+      isGmailAccount,
+      roleBadge,
+    } = req.body as {
       userId?: string;
       displayName?: string;
       avatarUrl?: string;
       avatarVisibility?: AvatarVisibility;
       flexTier?: FlexCardRarityTier;
+      isGmailAccount?: boolean;
+      roleBadge?: PostRoleBadge;
     };
     const cleanUid = String(userId || '').trim().slice(0, 128);
-    if (!cleanUid) {
-      res.status(400).json({ error: 'Missing userId.' });
+    if (!cleanUid || isBotAccountId(cleanUid)) {
+      res.status(400).json({ error: 'Invalid or missing userId.' });
       return;
     }
     const vis: AvatarVisibility =
       avatarVisibility === 'connections_only' ? 'connections_only' : 'world';
-    const cleanName = String(displayName || 'Scholar').trim().slice(0, 80);
-
     const social = loadSocial();
+
+    if (isGmailAccount !== true) {
+      if (social.directory[cleanUid]) {
+        delete social.directory[cleanUid];
+        saveSocial(social);
+        broadcastWs('social:presence:updated', {
+          directory: buildPublicDirectory(social),
+        });
+      }
+      res.json({ ok: true, avatarVisibility: vis });
+      return;
+    }
+
+    const cleanName = String(displayName || 'Scholar').trim().slice(0, 80);
+    const normalizedRoleBadge = formatPostRoleLabel(roleBadge);
+
     social.directory[cleanUid] = {
       userId: cleanUid,
       profileId: generateScholarProfileId(cleanUid),
@@ -425,6 +364,8 @@ export function registerSocialAndGovernanceRoutes(params: {
       avatarUrl: avatarUrl ? String(avatarUrl).slice(0, 350000) : social.directory[cleanUid]?.avatarUrl,
       avatarVisibility: vis,
       flexTier: flexTier || social.directory[cleanUid]?.flexTier || 'Common Slate',
+      isGmailAccount: true,
+      ...(normalizedRoleBadge ? { roleBadge: normalizedRoleBadge } : {}),
     };
     social.messages = social.messages.map((m) =>
       m.senderId === cleanUid
@@ -433,6 +374,8 @@ export function registerSocialAndGovernanceRoutes(params: {
             senderName: cleanName,
             senderAvatarUrl: avatarUrl ?? m.senderAvatarUrl,
             senderAvatarVisibility: vis,
+            senderIsGmailAccount: true,
+            ...(normalizedRoleBadge ? { senderRoleBadge: normalizedRoleBadge } : {}),
           }
         : m
     );
@@ -462,6 +405,8 @@ export function registerSocialAndGovernanceRoutes(params: {
       senderName,
       senderAvatarUrl,
       senderAvatarVisibility,
+      senderIsGmailAccount,
+      senderRoleBadge,
       text,
       flexCard,
     } = req.body as {
@@ -472,14 +417,22 @@ export function registerSocialAndGovernanceRoutes(params: {
       senderName?: string;
       senderAvatarUrl?: string;
       senderAvatarVisibility?: AvatarVisibility;
+      senderIsGmailAccount?: boolean;
+      senderRoleBadge?: PostRoleBadge;
       text?: string;
       flexCard?: SocialFlexAttachment;
     };
 
     const cleanSenderId = String(senderId || '').trim().slice(0, 128);
     const cleanSenderName = String(senderName || 'Scholar').trim().slice(0, 80);
-    if (!cleanSenderId) {
-      res.status(400).json({ error: 'Missing senderId.' });
+    if (!cleanSenderId || isBotAccountId(cleanSenderId)) {
+      res.status(400).json({ error: 'Invalid senderId.' });
+      return;
+    }
+    if (senderIsGmailAccount !== true) {
+      res.status(403).json({
+        error: 'Only accounts signed in with Gmail (@gmail.com) can post in Social SyllabiQ.',
+      });
       return;
     }
 
@@ -502,6 +455,7 @@ export function registerSocialAndGovernanceRoutes(params: {
 
     const vis: AvatarVisibility =
       senderAvatarVisibility === 'connections_only' ? 'connections_only' : 'world';
+    const normalizedRoleBadge = formatPostRoleLabel(senderRoleBadge);
 
     const sanitizedFlex: SocialFlexAttachment | undefined = validFlex && flexCard
       ? {
@@ -527,6 +481,8 @@ export function registerSocialAndGovernanceRoutes(params: {
       senderName: cleanSenderName,
       senderAvatarUrl: senderAvatarUrl ? String(senderAvatarUrl).slice(0, 350000) : undefined,
       senderAvatarVisibility: vis,
+      senderIsGmailAccount: true,
+      ...(normalizedRoleBadge ? { senderRoleBadge: normalizedRoleBadge } : {}),
       text: conduct.sanitizedText,
       flexCard: sanitizedFlex,
       createdAt: new Date().toISOString(),
@@ -540,6 +496,8 @@ export function registerSocialAndGovernanceRoutes(params: {
       avatarUrl: created.senderAvatarUrl || social.directory[cleanSenderId]?.avatarUrl,
       avatarVisibility: vis,
       flexTier: sanitizedFlex?.flexTier || social.directory[cleanSenderId]?.flexTier || 'Common Slate',
+      isGmailAccount: true,
+      ...(normalizedRoleBadge ? { roleBadge: normalizedRoleBadge } : {}),
     };
     saveSocial(social);
 
@@ -590,7 +548,7 @@ export function registerSocialAndGovernanceRoutes(params: {
 
     const reqUid = String(requesterId || '').trim().slice(0, 128);
     const recUid = String(recipientId || '').trim().slice(0, 128);
-    if (!reqUid || !recUid || reqUid === recUid) {
+    if (!reqUid || !recUid || reqUid === recUid || isBotAccountId(reqUid) || isBotAccountId(recUid)) {
       res.status(400).json({ error: 'Invalid connection peer IDs.' });
       return;
     }
@@ -612,8 +570,6 @@ export function registerSocialAndGovernanceRoutes(params: {
       return;
     }
 
-    // Seeded demo scholars auto-accept join requests so single-user sandbox sessions can immediately test Private chat & vault sharing, while real live users stay 'pending' until accepted!
-    const isSeededPeer = ['cand-ananya-02', 'cand-kabir-03', 'cand-meera-04'].includes(recUid);
     const recPeer = social.directory[recUid];
 
     const created: SocialConnection = {
@@ -627,7 +583,7 @@ export function registerSocialAndGovernanceRoutes(params: {
       recipientName: String(recipientName || recPeer?.displayName || 'Scholar').trim().slice(0, 80),
       recipientAvatarUrl: recPeer?.avatarUrl,
       recipientAvatarVisibility: recPeer?.avatarVisibility || 'world',
-      status: isSeededPeer ? 'connected' : 'pending',
+      status: 'pending',
       createdAt: now,
       updatedAt: now,
     };

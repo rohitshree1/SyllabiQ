@@ -33,6 +33,7 @@ import {
 } from '../utils/starterBlueprints';
 import { ALERTNESS_SLOT_MAP, LEARNING_STYLE_LABELS } from '../utils/studyEngine';
 import { t } from '../utils/translations';
+import { formatPostRoleLabel } from '../utils/verificationAndReferral';
 import heroDeskImg from '../assets/images/hero_study_desk_1793010659656.jpg';
 
 interface OnboardingWizardProps {
@@ -459,8 +460,9 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({
                 <span>{pinnedUpdate.body}</span>
               </p>
             </div>
-            <span className="font-mono tabular-nums text-[11px] text-slate-500 whitespace-nowrap shrink-0">
-              {pinnedUpdate.authorRoleLabel}
+            <span className="font-mono tabular-nums text-[11px] font-semibold text-sky-800 whitespace-nowrap shrink-0">
+              {pinnedUpdate.authorName} ·{' '}
+              {formatPostRoleLabel(pinnedUpdate.authorRoleLabel) || pinnedUpdate.authorRoleLabel}
             </span>
           </div>
         )}

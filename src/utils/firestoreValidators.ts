@@ -15,6 +15,14 @@ import type {
 import { computeDashboardMetrics } from './studyEngine';
 import { computeCandidateXpSnapshot, identifyNeededStudyTopics } from './xpAndOutreachEngine';
 import { MAX_AVATAR_DATA_URL_LENGTH, sanitizeAvatarForCloud } from './avatarStudio';
+import {
+  formatPostRoleLabel,
+  isBotAccountId,
+  isGmailEmail,
+  resolvePostRoleBadge,
+} from './verificationAndReferral';
+
+export { formatPostRoleLabel, isBotAccountId, isGmailEmail, resolvePostRoleBadge };
 
 // Verbatim constants & regexes synchronized with firebase-blueprint.json & firestore.rules
 export const VALID_ID_REGEX = /^[a-zA-Z0-9_\-]+$/;
@@ -446,6 +454,7 @@ export function buildSanitizedWorkspacePayload(ownerUid: string, state: AppState
             .filter(Boolean)
             .slice(0, 50)
         : undefined,
+      accountRole: state.student.accountRole === 'teacher' ? 'teacher' : 'student',
       institutionType: state.student.institutionType === 'school' ? 'school' : 'university',
       boardOrUniversity: sanitizeText(
         state.student.boardOrUniversity,
@@ -559,6 +568,7 @@ export function evaluateFirestoreRuleOperation(params: {
 
   const isSignedIn = auth !== null;
   const isVerified = Boolean(auth && auth.email_verified === true);
+  const isGmailAuth = Boolean(isVerified && auth && isGmailEmail(auth.email));
   const isSuperAdmin = Boolean(
     isVerified && auth?.email === BOOTSTRAPPED_SUPER_ADMIN_EMAIL
   );
@@ -578,6 +588,13 @@ export function evaluateFirestoreRuleOperation(params: {
     if (!member || !member.active) return false;
     const invite = db.staff_invites[member.inviteKey];
     return Boolean(invite && invite.status === 'active');
+  };
+
+  const isValidRoleBadgeForCaller = (badge: unknown): boolean => {
+    if (badge === 'Teacher') return true;
+    if (badge === 'Delegated Team Admin') return isSubAdmin();
+    if (badge === 'Super Admin') return isSuperAdmin;
+    return false;
   };
 
   if (operation !== 'list' && !isValidFirestoreId(docId)) {
@@ -1040,7 +1057,10 @@ export function evaluateFirestoreRuleOperation(params: {
         incomingData.grantedByUid !== auth.uid ||
         incomingData.acknowledged !== false ||
         incomingData.createdAt !== reqTime ||
-        incomingData.updatedAt !== reqTime
+        incomingData.updatedAt !== reqTime ||
+        ('grantedByRoleLabel' in incomingData &&
+          (typeof incomingData.grantedByRoleLabel !== 'string' ||
+            incomingData.grantedByRoleLabel.length > BLUEPRINT_LIMITS.roleLabelMax))
       ) {
         return 'PERMISSION_DENIED';
       }
@@ -1051,6 +1071,7 @@ export function evaluateFirestoreRuleOperation(params: {
       if (
         incomingData.targetUserId !== existing.targetUserId ||
         incomingData.grantedByUid !== existing.grantedByUid ||
+        incomingData.grantedByRoleLabel !== existing.grantedByRoleLabel ||
         incomingData.createdAt !== existing.createdAt ||
         incomingData.updatedAt !== reqTime
       ) {
@@ -1284,7 +1305,7 @@ export function evaluateFirestoreRuleOperation(params: {
       return docs.every((d) => typeof d.userId === 'string') ? 'ALLOW' : 'PERMISSION_DENIED';
     }
     if (operation === 'create') {
-      if (!isVerified || !auth || !incomingData || auth.uid !== docId) return 'PERMISSION_DENIED';
+      if (!isGmailAuth || !auth || !incomingData || auth.uid !== docId) return 'PERMISSION_DENIED';
       if (
         incomingData.userId !== auth.uid ||
         typeof incomingData.profileId !== 'string' ||
@@ -1294,6 +1315,10 @@ export function evaluateFirestoreRuleOperation(params: {
         incomingData.displayName.length > 80 ||
         (incomingData.avatarVisibility !== 'world' &&
           incomingData.avatarVisibility !== 'connections_only') ||
+        incomingData.isGmailAccount !== true ||
+        ('roleBadge' in incomingData &&
+          incomingData.roleBadge !== undefined &&
+          !isValidRoleBadgeForCaller(incomingData.roleBadge)) ||
         incomingData.createdAt !== reqTime ||
         incomingData.updatedAt !== reqTime
       ) {
@@ -1302,7 +1327,7 @@ export function evaluateFirestoreRuleOperation(params: {
       return 'ALLOW';
     }
     if (operation === 'update') {
-      if (!isVerified || !auth || !existing || !incomingData || auth.uid !== docId) {
+      if (!isGmailAuth || !auth || !existing || !incomingData || auth.uid !== docId) {
         return 'PERMISSION_DENIED';
       }
       if (
@@ -1310,11 +1335,17 @@ export function evaluateFirestoreRuleOperation(params: {
         incomingData.profileId !== existing.profileId ||
         incomingData.createdAt !== existing.createdAt ||
         incomingData.updatedAt !== reqTime ||
+        ('isGmailAccount' in incomingData && incomingData.isGmailAccount !== true) ||
+        ('roleBadge' in incomingData &&
+          incomingData.roleBadge !== undefined &&
+          !isValidRoleBadgeForCaller(incomingData.roleBadge)) ||
         !affectedKeysOnly(existing, incomingData, [
           'displayName',
           'avatarUrl',
           'avatarVisibility',
           'flexTier',
+          'isGmailAccount',
+          'roleBadge',
           'updatedAt',
         ])
       ) {
@@ -1350,7 +1381,7 @@ export function evaluateFirestoreRuleOperation(params: {
         : 'PERMISSION_DENIED';
     }
     if (operation === 'create') {
-      if (!isVerified || !auth || !incomingData) return 'PERMISSION_DENIED';
+      if (!isGmailAuth || !auth || !incomingData) return 'PERMISSION_DENIED';
       const cand = db.candidates[auth.uid];
       if (cand && cand.banned === true) return 'PERMISSION_DENIED';
       const participants = Array.isArray(incomingData.participants)
@@ -1359,6 +1390,10 @@ export function evaluateFirestoreRuleOperation(params: {
       if (
         incomingData.id !== docId ||
         incomingData.senderId !== auth.uid ||
+        ('senderIsGmailAccount' in incomingData && incomingData.senderIsGmailAccount !== true) ||
+        ('senderRoleBadge' in incomingData &&
+          incomingData.senderRoleBadge !== undefined &&
+          !isValidRoleBadgeForCaller(incomingData.senderRoleBadge)) ||
         incomingData.createdAt !== reqTime ||
         typeof incomingData.text !== 'string' ||
         incomingData.text.length > 500 ||
@@ -1406,7 +1441,7 @@ export function evaluateFirestoreRuleOperation(params: {
         : 'PERMISSION_DENIED';
     }
     if (operation === 'create') {
-      if (!isVerified || !auth || !incomingData) return 'PERMISSION_DENIED';
+      if (!isGmailAuth || !auth || !incomingData) return 'PERMISSION_DENIED';
       const participants = Array.isArray(incomingData.participants)
         ? incomingData.participants
         : [];
@@ -1426,7 +1461,7 @@ export function evaluateFirestoreRuleOperation(params: {
       return 'ALLOW';
     }
     if (operation === 'update') {
-      if (!isVerified || !auth || !existing || !incomingData) return 'PERMISSION_DENIED';
+      if (!isGmailAuth || !auth || !existing || !incomingData) return 'PERMISSION_DENIED';
       if (
         incomingData.id !== existing.id ||
         incomingData.requesterId !== existing.requesterId ||

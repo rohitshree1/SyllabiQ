@@ -15,6 +15,7 @@ import type {
   IntakeExtractedUpdates,
   IssuedCredentialDoc,
   MCQQuestion,
+  PostRoleBadge,
   SocialChatMessage,
   SocialConnection,
   SocialDirectoryPeer,
@@ -942,11 +943,13 @@ export async function fetchSocialSyllabiQStateApi(): Promise<{
     const res = await fetchWithTimeout('/api/social/state', { method: 'GET' }, 4500);
     const data = res.ok ? await parseJsonSafely<Record<string, unknown>>(res) : null;
     if (res.ok && data && (Array.isArray(data.messages) || Array.isArray(data.directory))) {
+      const msgs = Array.isArray(data.messages) ? (data.messages as SocialChatMessage[]) : [];
+      const dir = Array.isArray(data.directory) ? (data.directory as SocialDirectoryPeer[]) : [];
       return {
-        messages: Array.isArray(data.messages) ? (data.messages as SocialChatMessage[]) : [],
+        messages: msgs.filter((m) => m.senderIsGmailAccount === true),
         connections: Array.isArray(data.connections) ? (data.connections as SocialConnection[]) : [],
         vaultGrants: Array.isArray(data.vaultGrants) ? (data.vaultGrants as SocialVaultGrant[]) : [],
-        directory: Array.isArray(data.directory) ? (data.directory as SocialDirectoryPeer[]) : [],
+        directory: dir.filter((d) => d.isGmailAccount === true),
         backendAvailable: true,
       };
     }
@@ -964,6 +967,8 @@ export async function postSocialMessageApi(payload: {
   senderName: string;
   senderAvatarUrl?: string;
   senderAvatarVisibility: AvatarVisibility;
+  senderIsGmailAccount?: boolean;
+  senderRoleBadge?: PostRoleBadge;
   text: string;
   flexCard?: SocialFlexAttachment;
 }): Promise<{ message?: SocialChatMessage; error?: string; usedStaticFallback?: boolean }> {
@@ -1009,6 +1014,8 @@ export async function updateSocialProfileVisibilityApi(payload: {
   avatarVisibility: AvatarVisibility;
   flexTier: FlexCardRarityTier;
   profileId?: string;
+  isGmailAccount?: boolean;
+  roleBadge?: PostRoleBadge;
 }): Promise<void> {
   updateSocialProfileVisibilityLocal(payload);
   try {

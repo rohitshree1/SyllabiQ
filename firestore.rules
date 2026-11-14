@@ -26,6 +26,12 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email_verified == true;
     }
 
+    function isGmailAuth() {
+      return isVerifiedUser()
+        && request.auth.token.email is string
+        && request.auth.token.email.matches('^[^@\\s]+@[gG][mM][aA][iI][lL]\\.[cC][oO][mM]$');
+    }
+
     function isOwner(userId) {
       return isVerifiedUser() && request.auth.uid == userId;
     }
@@ -80,6 +86,12 @@ service cloud.firestore {
       return exists(/databases/$(database)/documents/candidates/$(userId))
         && (!('banned' in get(/databases/$(database)/documents/candidates/$(userId)).data)
           || get(/databases/$(database)/documents/candidates/$(userId)).data.banned == false);
+    }
+
+    function isValidRoleBadgeForCaller(badge) {
+      return badge == 'Teacher'
+        || (badge == 'Delegated Team Admin' && isSubAdmin())
+        || (badge == 'Super Admin' && isSuperAdmin());
     }
 
     // =========================================================================
@@ -299,6 +311,7 @@ service cloud.firestore {
           'targetName',
           'grantedByUid',
           'grantedByName',
+          'grantedByRoleLabel',
           'bonusTitle',
           'bonusType',
           'pointsAwarded',
@@ -311,6 +324,7 @@ service cloud.firestore {
         && data.targetName is string && data.targetName.size() >= 1 && data.targetName.size() <= 80
         && isValidId(data.grantedByUid)
         && data.grantedByName is string && data.grantedByName.size() >= 1 && data.grantedByName.size() <= 80
+        && (!('grantedByRoleLabel' in data) || (data.grantedByRoleLabel is string && data.grantedByRoleLabel.size() >= 1 && data.grantedByRoleLabel.size() <= 40))
         && data.bonusTitle is string && data.bonusTitle.size() >= 1 && data.bonusTitle.size() <= 100
         && data.bonusType is string && data.bonusType.size() <= 32
         && (
@@ -538,6 +552,8 @@ service cloud.firestore {
           'avatarUrl',
           'avatarVisibility',
           'flexTier',
+          'isGmailAccount',
+          'roleBadge',
           'createdAt',
           'updatedAt'
         ])
@@ -549,6 +565,8 @@ service cloud.firestore {
         && data.avatarVisibility is string && data.avatarVisibility.size() <= 20
         && (data.avatarVisibility == 'world' || data.avatarVisibility == 'connections_only')
         && data.flexTier is string && data.flexTier.size() >= 1 && data.flexTier.size() <= 40
+        && (!('isGmailAccount' in data) || data.isGmailAccount is bool)
+        && (!('roleBadge' in data) || (data.roleBadge is string && (data.roleBadge == 'Super Admin' || data.roleBadge == 'Delegated Team Admin' || data.roleBadge == 'Teacher')))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -574,6 +592,8 @@ service cloud.firestore {
           'senderName',
           'senderAvatarUrl',
           'senderAvatarVisibility',
+          'senderIsGmailAccount',
+          'senderRoleBadge',
           'text',
           'flexCard',
           'createdAt'
@@ -589,6 +609,8 @@ service cloud.firestore {
         && (!('senderAvatarUrl' in data) || (data.senderAvatarUrl is string && data.senderAvatarUrl.size() <= 350000))
         && data.senderAvatarVisibility is string && data.senderAvatarVisibility.size() <= 20
         && (data.senderAvatarVisibility == 'world' || data.senderAvatarVisibility == 'connections_only')
+        && (!('senderIsGmailAccount' in data) || data.senderIsGmailAccount is bool)
+        && (!('senderRoleBadge' in data) || (data.senderRoleBadge is string && (data.senderRoleBadge == 'Super Admin' || data.senderRoleBadge == 'Delegated Team Admin' || data.senderRoleBadge == 'Teacher')))
         && data.text is string && data.text.size() <= 500
         && (!('flexCard' in data) || (data.flexCard is map && data.flexCard.keys().size() <= 10))
         && data.createdAt is timestamp;
@@ -921,6 +943,8 @@ service cloud.firestore {
         && isValidId(bonusId)
         && incoming().targetUserId == existing().targetUserId
         && incoming().grantedByUid == existing().grantedByUid
+        && (!('grantedByRoleLabel' in existing())
+          || ('grantedByRoleLabel' in incoming() && incoming().grantedByRoleLabel == existing().grantedByRoleLabel))
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
@@ -1188,21 +1212,26 @@ service cloud.firestore {
       allow list: if isSuperAdmin() || (isVerifiedUser() && existing().userId is string);
 
       allow create: if isSignedIn()
-        && isVerifiedUser()
+        && isGmailAuth()
         && isValidId(userId)
         && isValidSocialProfile(incoming())
         && isOwner(userId)
         && incoming().userId == request.auth.uid
+        && ('isGmailAccount' in incoming())
+        && incoming().isGmailAccount == true
+        && (!('roleBadge' in incoming()) || isValidRoleBadgeForCaller(incoming().roleBadge))
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
 
       allow update: if isSignedIn()
         && isValidSocialProfile(incoming())
-        && isVerifiedUser()
+        && isGmailAuth()
         && isValidId(userId)
         && isOwner(userId)
         && incoming().userId == existing().userId
         && incoming().profileId == existing().profileId
+        && (!('isGmailAccount' in incoming()) || incoming().isGmailAccount == true)
+        && (!('roleBadge' in incoming()) || isValidRoleBadgeForCaller(incoming().roleBadge))
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly([
@@ -1210,6 +1239,8 @@ service cloud.firestore {
           'avatarUrl',
           'avatarVisibility',
           'flexTier',
+          'isGmailAccount',
+          'roleBadge',
           'updatedAt'
         ]);
 
@@ -1229,11 +1260,13 @@ service cloud.firestore {
         || (isVerifiedUser() && (existing().channelType == 'world' || request.auth.uid in existing().participants));
 
       allow create: if isSignedIn()
-        && isVerifiedUser()
+        && isGmailAuth()
         && isValidId(messageId)
         && isValidSocialMessage(incoming())
         && incoming().id == messageId
         && incoming().senderId == request.auth.uid
+        && (!('senderIsGmailAccount' in incoming()) || incoming().senderIsGmailAccount == true)
+        && (!('senderRoleBadge' in incoming()) || isValidRoleBadgeForCaller(incoming().senderRoleBadge))
         && incoming().createdAt == request.time
         && (!exists(/databases/$(database)/documents/candidates/$(request.auth.uid))
           || get(/databases/$(database)/documents/candidates/$(request.auth.uid)).data.banned == false)
@@ -1261,7 +1294,7 @@ service cloud.firestore {
         || (isVerifiedUser() && request.auth.uid in existing().participants);
 
       allow create: if isSignedIn()
-        && isVerifiedUser()
+        && isGmailAuth()
         && isValidId(connectionId)
         && isValidSocialConnection(incoming())
         && incoming().id == connectionId
@@ -1275,7 +1308,7 @@ service cloud.firestore {
 
       allow update: if isSignedIn()
         && isValidSocialConnection(incoming())
-        && isVerifiedUser()
+        && isGmailAuth()
         && isValidId(connectionId)
         && incoming().id == existing().id
         && incoming().requesterId == existing().requesterId

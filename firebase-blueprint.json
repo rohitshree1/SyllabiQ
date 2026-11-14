@@ -405,6 +405,12 @@
           "minLength": 1,
           "maxLength": 80
         },
+        "grantedByRoleLabel": {
+          "type": "string",
+          "description": "Display role label of the issuing admin ('Super Admin' or 'Delegated Team Admin').",
+          "minLength": 1,
+          "maxLength": 40
+        },
         "bonusTitle": {
           "type": "string",
           "description": "Headline of the special bonus or badge.",
@@ -899,6 +905,16 @@
           "minLength": 1,
           "maxLength": 40
         },
+        "isGmailAccount": {
+          "type": "boolean",
+          "description": "True when verified via Google (@gmail.com) OAuth."
+        },
+        "roleBadge": {
+          "type": "string",
+          "description": "Verified role label shown next to posts/directory entries.",
+          "enum": ["Super Admin", "Delegated Team Admin", "Teacher"],
+          "maxLength": 32
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
@@ -971,6 +987,16 @@
           "description": "Sender avatar visibility.",
           "enum": ["world", "connections_only"],
           "maxLength": 20
+        },
+        "senderIsGmailAccount": {
+          "type": "boolean",
+          "description": "True when sender is authenticated via Google (@gmail.com)."
+        },
+        "senderRoleBadge": {
+          "type": "string",
+          "description": "Verified sender role label displayed on World/DM posts.",
+          "enum": ["Super Admin", "Delegated Team Admin", "Teacher"],
+          "maxLength": 32
         },
         "text": {
           "type": "string",
