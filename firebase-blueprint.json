@@ -856,6 +856,243 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "SocialProfile": {
+      "title": "SocialProfile",
+      "description": "Zero-PII scholar directory card for Social SyllabiQ Profile ID lookup.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated scholar UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "profileId": {
+          "type": "string",
+          "description": "Deterministic Profile ID (SLQ-USR-...).",
+          "minLength": 1,
+          "maxLength": 40,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Scholar public display name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "avatarUrl": {
+          "type": "string",
+          "description": "Optional avatar URL or compressed image data URI.",
+          "maxLength": 350000
+        },
+        "avatarVisibility": {
+          "type": "string",
+          "description": "Avatar visibility preference.",
+          "enum": ["world", "connections_only"],
+          "maxLength": 20
+        },
+        "flexTier": {
+          "type": "string",
+          "description": "Current FlexCard rarity tier.",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "userId",
+        "profileId",
+        "displayName",
+        "avatarVisibility",
+        "flexTier",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SocialMessage": {
+      "title": "SocialMessage",
+      "description": "Zero-PII World or 1-on-1 Private study message with optional verified FlexCard.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique message ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "channelType": {
+          "type": "string",
+          "description": "Strictly 'world' or 'dm' (1-on-1 only).",
+          "enum": ["world", "dm"],
+          "maxLength": 10
+        },
+        "channelId": {
+          "type": "string",
+          "description": "'world' or deterministic 1-on-1 dm channel key.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "participants": {
+          "type": "array",
+          "description": "Participant UIDs (size 1 for world, size 2 for dm)."
+        },
+        "senderId": {
+          "type": "string",
+          "description": "Sender UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "senderName": {
+          "type": "string",
+          "description": "Sender display name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "senderAvatarUrl": {
+          "type": "string",
+          "description": "Optional sender avatar URL or compressed image data URI.",
+          "maxLength": 350000
+        },
+        "senderAvatarVisibility": {
+          "type": "string",
+          "description": "Sender avatar visibility.",
+          "enum": ["world", "connections_only"],
+          "maxLength": 20
+        },
+        "text": {
+          "type": "string",
+          "description": "Conduct-checked message text.",
+          "maxLength": 500
+        },
+        "flexCard": {
+          "type": "object",
+          "description": "Optional verified FlexCard attachment metadata."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "channelType",
+        "channelId",
+        "participants",
+        "senderId",
+        "senderName",
+        "senderAvatarVisibility",
+        "text",
+        "createdAt"
+      ]
+    },
+    "SocialConnection": {
+      "title": "SocialConnection",
+      "description": "1-on-1 peer study connection between two scholars.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Connection document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "requesterId": {
+          "type": "string",
+          "description": "Requester UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "requesterName": {
+          "type": "string",
+          "description": "Requester display name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "requesterAvatarUrl": {
+          "type": "string",
+          "description": "Optional requester avatar.",
+          "maxLength": 350000
+        },
+        "requesterAvatarVisibility": {
+          "type": "string",
+          "description": "Requester avatar visibility.",
+          "enum": ["world", "connections_only"],
+          "maxLength": 20
+        },
+        "recipientId": {
+          "type": "string",
+          "description": "Recipient UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "recipientName": {
+          "type": "string",
+          "description": "Recipient display name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "recipientAvatarUrl": {
+          "type": "string",
+          "description": "Optional recipient avatar.",
+          "maxLength": 350000
+        },
+        "recipientAvatarVisibility": {
+          "type": "string",
+          "description": "Recipient avatar visibility.",
+          "enum": ["world", "connections_only"],
+          "maxLength": 20
+        },
+        "participants": {
+          "type": "array",
+          "description": "Exact two-UID tuple [requesterId, recipientId]."
+        },
+        "status": {
+          "type": "string",
+          "description": "Connection lifecycle state.",
+          "enum": ["pending", "connected"],
+          "maxLength": 20
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "requesterId",
+        "requesterName",
+        "requesterAvatarVisibility",
+        "recipientId",
+        "recipientName",
+        "recipientAvatarVisibility",
+        "participants",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -898,6 +1135,18 @@
     "/credential_verifications/{verificationId}": {
       "schema": { "$ref": "#/entities/CredentialVerification" },
       "description": "Candidate-isolated notification log when non-admin visitors verify a serial."
+    },
+    "/social_profiles/{userId}": {
+      "schema": { "$ref": "#/entities/SocialProfile" },
+      "description": "Zero-PII scholar directory profiles for Profile ID discovery."
+    },
+    "/social_messages/{messageId}": {
+      "schema": { "$ref": "#/entities/SocialMessage" },
+      "description": "Real-time World & 1-on-1 DM study stream messages."
+    },
+    "/social_connections/{connectionId}": {
+      "schema": { "$ref": "#/entities/SocialConnection" },
+      "description": "1-on-1 scholar connection state between two UIDs."
     }
   }
 }

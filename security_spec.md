@@ -10,9 +10,10 @@
    - Delegated Sub-Admins inspect full candidate academic + outreach profiles via O(1) single-document `get` on `/admin_digests/overview` and `/candidates/{userId}`.
 4. **Bootstrapped Super Admin (`rohitshree1973@gmail.com`) & Mandatory Admin Contact Assignment**:
    - Primary Super Admin is strictly `request.auth.token.email == 'rohitshree1973@gmail.com' && request.auth.token.email_verified == true`.
+   - The Super Admin target (`rohitshree1973@gmail.com`) is strictly non-bannable (`banned == true` updates are rejected across all admin roles including self-ban, while `banned == false` healing is permitted by Super Admin).
    - Every `/staff_invites/{inviteKey}` created or updated by `isSuperAdmin()` MUST provide a verified `@gmail.com` `targetEmail` (`3..160` chars) AND a valid `adminPhone` (`7..32` chars) so every delegated admin has both a Super-Admin-assigned Gmail and phone number for candidate outreach.
    - Sub-Admins in `/staff_members/{userId}` (`active == true`) can ONLY be created/synced by `isSuperAdmin()` OR claimed/synced by an authenticated verified user whose email matches an active `/staff_invites/{inviteKey}` with identical boolean permission flags (`canPostUpdates`, `canGrantBonuses`, `canBanUsers`).
-   - Users can NEVER self-assign admin roles, unban themselves, or modify their own `bonusPoints` or `adsEnabled`.
+   - Non-Super-Admin users can NEVER self-assign admin roles, unban themselves, or modify their own `bonusPoints` or `adsEnabled`.
 5. **Relational Master Gate on Workspaces & Bonuses**:
    - `/workspaces/{userId}` requires `/candidates/{userId}` to exist AND `get(.../candidates/$(userId)).data.banned == false` for candidate writes. Suspending a candidate in `/candidates/{userId}` synchronously revokes workspace write access.
    - `/individual_bonuses/{bonusId}` requires `/candidates/$(incoming().targetUserId)` to exist on creation, preventing orphaned bonus grants.
@@ -27,10 +28,14 @@
 9. **Issued Credentials & Non-Admin Verifier Notifications**:
    - `/issued_credentials/{credentialCode}` contains zero PII, disables `list` (`allow list: if false;`), allows O(1) `get` by `isValidSerialId(credentialCode)` for serial authenticity verification, and restricts `create`/`update` to the verified `ownerUid` or `isSuperAdmin()`.
    - `/credential_verifications/{verificationId}` isolates verifier PII (`verifierGmail`, `verifierName`, `verifierPost`) strictly to `targetUserId == request.auth.uid || isSuperAdmin()`, enforces `exists(/issued_credentials/$(credentialCode))` and `ownerUid == targetUserId` on `create`, and locks `acknowledged` terminally (`false -> true`).
+10. **Social SyllabiQ World & 1-on-1 Isolation (Zero PII)**:
+   - `/social_profiles/{userId}`, `/social_messages/{messageId}`, and `/social_connections/{connectionId}` strictly exclude email/phone PII and restrict writes to `isVerifiedUser()`.
+   - `/social_messages` distinguishes `channelType == 'world'` (readable by verified scholars) from `channelType == 'dm'` (`participants.size() == 2` and `request.auth.uid in existing().participants` enforced in both `get` and `list` without `get()`/`exists()` inside `allow list`). Messages are immutable (`allow update: if false;`).
+   - `/social_connections` enforces `requesterId == request.auth.uid`, `recipientId != requesterId`, `status: 'pending' -> 'connected'` terminal transition exclusively by `recipientId == request.auth.uid` (or `isSuperAdmin()`).
 
 ---
 
-## 2. The "Dirty Dozen" Adversarial Payloads (Must All Return `PERMISSION_DENIED`)
+## 2. The "Dirty Dozen" + Social Adversarial Payloads (Must All Return `PERMISSION_DENIED`)
 
 1. **Payload 01 — Shadow Field Injection on Candidate Create**: Valid `/candidates/{uid}` payload plus injected `{ "isAdmin": true }` ghost property -> Blocked by `data.keys().hasOnly(...)`.
 2. **Payload 02 — Self-Assigned Bonus Points on Candidate Create**: Candidate creates `/candidates/{uid}` with `bonusPoints: 9999` or `banned: true` -> Blocked by create gate requiring `bonusPoints == 0 && banned == false`.
@@ -44,3 +49,6 @@
 10. **Payload 10 — Orphaned Individual Bonus Creation**: Authorized staff attempts to create `/individual_bonuses/bon_orphan` for non-existent `targetUserId` -> Blocked by `exists(/databases/$(database)/documents/candidates/$(incoming().targetUserId))`.
 11. **Payload 11 — Resource Exhaustion / ID Poisoning**: Candidate sends a 5,000-character `displayName` or `../etc/passwd` document ID -> Blocked by `isValidId()` regex + strict `.size() <= 80` check inside `isValidCandidateSummary()`.
 12. **Payload 12 — Terminal State Reversal & Missing Admin Phone/Gmail**: Candidate attempts to flip `acknowledged` from `true` back to `false` on `/individual_bonuses/{bonusId}` OR Super Admin attempts to create `/staff_invites` without a valid `adminPhone` (`>= 7` chars) or `@gmail.com` email -> Blocked by Terminal State Gate and `isValidStaffInvite()` contact validation.
+13. **Payload 13 — Spoofed Sender Identity in Social Chat**: Verified Candidate B attempts to post `/social_messages/{id}` with `senderId: "cand_alice"` -> Blocked by `incoming().senderId == request.auth.uid`.
+14. **Payload 14 — Eavesdropping on 1-on-1 Private DM Messages**: Verified Candidate C attempts `get` or `list` on `/social_messages` belonging to a DM between `cand_alice` and `cand_bob` -> Blocked by `existing().channelType == 'world' || request.auth.uid in existing().participants`.
+15. **Payload 15 — Self-Approving Pending 1-on-1 Connection**: Requester attempts to update `/social_connections/{id}` from `pending` to `connected` instead of recipient approving -> Blocked by `existing().recipientId == request.auth.uid`.

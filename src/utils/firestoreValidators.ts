@@ -19,6 +19,83 @@ import { MAX_AVATAR_DATA_URL_LENGTH, sanitizeAvatarForCloud } from './avatarStud
 // Verbatim constants & regexes synchronized with firebase-blueprint.json & firestore.rules
 export const VALID_ID_REGEX = /^[a-zA-Z0-9_\-]+$/;
 export const BOOTSTRAPPED_SUPER_ADMIN_EMAIL = 'rohitshree1973@gmail.com';
+export const DEMO_PLACEHOLDER_EMAIL = 'aarav.mehta.study@gmail.com';
+
+const DEMO_PLACEHOLDER_NAMES = new Set([
+  'aarav mehta',
+  'aarav sharma',
+  'aarav',
+  'scholar',
+  'banned candidate',
+]);
+
+export function isSuperAdminEmail(email: unknown): boolean {
+  return (
+    typeof email === 'string' &&
+    email.trim().toLowerCase() === BOOTSTRAPPED_SUPER_ADMIN_EMAIL
+  );
+}
+
+export function isDemoPlaceholderStudentName(name: unknown): boolean {
+  if (typeof name !== 'string') return true;
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) return true;
+  return DEMO_PLACEHOLDER_NAMES.has(normalized);
+}
+
+export function resolveAuthenticatedDisplayName(user: {
+  displayName?: string | null;
+  email?: string | null;
+}): string {
+  const rawName = sanitizeText(user.displayName ?? '', BLUEPRINT_LIMITS.displayNameMax, '');
+  if (rawName && !isDemoPlaceholderStudentName(rawName)) {
+    return rawName;
+  }
+  const cleanEmail = typeof user.email === 'string' ? user.email.trim() : '';
+  if (isSuperAdminEmail(cleanEmail)) {
+    return 'Rohit Shree';
+  }
+  if (cleanEmail.includes('@')) {
+    const localPart = cleanEmail.split('@')[0].replace(/[._-]+/g, ' ').trim();
+    if (localPart) {
+      const formatted = localPart
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ')
+        .slice(0, BLUEPRINT_LIMITS.displayNameMax);
+      if (formatted && !isDemoPlaceholderStudentName(formatted)) {
+        return formatted;
+      }
+    }
+  }
+  return 'Scholar';
+}
+
+export function isSuperAdminCandidateRecord(
+  cand:
+    | {
+        ownerUid?: unknown;
+        email?: unknown;
+        contactEmail?: unknown;
+        role?: unknown;
+      }
+    | null
+    | undefined,
+  knownSuperAdminUid?: string | null
+): boolean {
+  if (!cand) return false;
+  if (isSuperAdminEmail(cand.email) || isSuperAdminEmail(cand.contactEmail)) {
+    return true;
+  }
+  if (typeof cand.role === 'string' && cand.role.trim().toLowerCase() === 'super_admin') {
+    return true;
+  }
+  if (knownSuperAdminUid && cand.ownerUid === knownSuperAdminUid) {
+    return true;
+  }
+  return false;
+}
 
 export const BLUEPRINT_LIMITS = {
   idMax: 128,
@@ -439,6 +516,9 @@ export interface SimulatedDatabaseState {
   admin_digests: Record<string, AdminDigestDoc>;
   issued_credentials?: Record<string, Record<string, unknown>>;
   credential_verifications?: Record<string, Record<string, unknown>>;
+  social_profiles?: Record<string, Record<string, unknown>>;
+  social_messages?: Record<string, Record<string, unknown>>;
+  social_connections?: Record<string, Record<string, unknown>>;
 }
 
 export type RuleDecision = 'ALLOW' | 'PERMISSION_DENIED';
@@ -771,8 +851,18 @@ export function evaluateFirestoreRuleOperation(params: {
           'createdAt',
           'updatedAt',
         ]);
+      const privRec = db.users_private?.[docId] as Record<string, unknown> | undefined;
+      const isProtectedSuperAdminTarget = Boolean(
+        isSuperAdminEmail(privRec?.email) ||
+          isSuperAdminEmail(existing.contactEmail) ||
+          (isSuperAdmin && auth?.uid === docId)
+      );
+      const banTargetSafe =
+        incomingData.banned === false || !isProtectedSuperAdminTarget;
+
       const staffBan =
         (isSuperAdmin || hasStaffPerm('canBanUsers')) &&
+        banTargetSafe &&
         affectedKeysOnly(existing, incomingData, ['banned', 'banReason', 'updatedAt']);
       const staffBonus =
         (isSuperAdmin || hasStaffPerm('canGrantBonuses')) &&
@@ -794,7 +884,12 @@ export function evaluateFirestoreRuleOperation(params: {
         typeof incomingData.adsEnabled === 'boolean' &&
         affectedKeysOnly(existing, incomingData, ['adsEnabled', 'updatedAt']);
 
-      return ownerSync || staffBan || staffBonus || staffDeduction || superAdminAds || isSuperAdmin
+      return ownerSync ||
+        staffBan ||
+        staffBonus ||
+        staffDeduction ||
+        superAdminAds ||
+        (isSuperAdmin && banTargetSafe)
         ? 'ALLOW'
         : 'PERMISSION_DENIED';
     }
@@ -1172,6 +1267,194 @@ export function evaluateFirestoreRuleOperation(params: {
         incomingData.acknowledged === true &&
         affectedKeysOnly(existing, incomingData, ['acknowledged', 'updatedAt']);
       return ownerAck || isSuperAdmin ? 'ALLOW' : 'PERMISSION_DENIED';
+    }
+  }
+
+  // 11. social_profiles
+  if (collection === 'social_profiles') {
+    const map = db.social_profiles ?? {};
+    const existing = map[docId];
+    if (operation === 'get') {
+      return isVerified && isValidFirestoreId(docId) ? 'ALLOW' : 'PERMISSION_DENIED';
+    }
+    if (operation === 'list') {
+      if (isSuperAdmin) return 'ALLOW';
+      if (!isVerified) return 'PERMISSION_DENIED';
+      const docs = Object.values(map);
+      return docs.every((d) => typeof d.userId === 'string') ? 'ALLOW' : 'PERMISSION_DENIED';
+    }
+    if (operation === 'create') {
+      if (!isVerified || !auth || !incomingData || auth.uid !== docId) return 'PERMISSION_DENIED';
+      if (
+        incomingData.userId !== auth.uid ||
+        typeof incomingData.profileId !== 'string' ||
+        !VALID_ID_REGEX.test(incomingData.profileId) ||
+        typeof incomingData.displayName !== 'string' ||
+        incomingData.displayName.length < 1 ||
+        incomingData.displayName.length > 80 ||
+        (incomingData.avatarVisibility !== 'world' &&
+          incomingData.avatarVisibility !== 'connections_only') ||
+        incomingData.createdAt !== reqTime ||
+        incomingData.updatedAt !== reqTime
+      ) {
+        return 'PERMISSION_DENIED';
+      }
+      return 'ALLOW';
+    }
+    if (operation === 'update') {
+      if (!isVerified || !auth || !existing || !incomingData || auth.uid !== docId) {
+        return 'PERMISSION_DENIED';
+      }
+      if (
+        incomingData.userId !== existing.userId ||
+        incomingData.profileId !== existing.profileId ||
+        incomingData.createdAt !== existing.createdAt ||
+        incomingData.updatedAt !== reqTime ||
+        !affectedKeysOnly(existing, incomingData, [
+          'displayName',
+          'avatarUrl',
+          'avatarVisibility',
+          'flexTier',
+          'updatedAt',
+        ])
+      ) {
+        return 'PERMISSION_DENIED';
+      }
+      return 'ALLOW';
+    }
+    if (operation === 'delete') {
+      return isSuperAdmin ? 'ALLOW' : 'PERMISSION_DENIED';
+    }
+  }
+
+  // 12. social_messages
+  if (collection === 'social_messages') {
+    const map = db.social_messages ?? {};
+    const existing = map[docId];
+    if (operation === 'get') {
+      if (!isVerified || !auth || !existing) return 'PERMISSION_DENIED';
+      const participants = Array.isArray(existing.participants) ? existing.participants : [];
+      return existing.channelType === 'world' || participants.includes(auth.uid) || isSuperAdmin
+        ? 'ALLOW'
+        : 'PERMISSION_DENIED';
+    }
+    if (operation === 'list') {
+      if (isSuperAdmin) return 'ALLOW';
+      if (!isVerified || !auth) return 'PERMISSION_DENIED';
+      const docs = Object.values(map);
+      return docs.every((m) => {
+        const participants = Array.isArray(m.participants) ? m.participants : [];
+        return m.channelType === 'world' || participants.includes(auth.uid);
+      })
+        ? 'ALLOW'
+        : 'PERMISSION_DENIED';
+    }
+    if (operation === 'create') {
+      if (!isVerified || !auth || !incomingData) return 'PERMISSION_DENIED';
+      const cand = db.candidates[auth.uid];
+      if (cand && cand.banned === true) return 'PERMISSION_DENIED';
+      const participants = Array.isArray(incomingData.participants)
+        ? incomingData.participants
+        : [];
+      if (
+        incomingData.id !== docId ||
+        incomingData.senderId !== auth.uid ||
+        incomingData.createdAt !== reqTime ||
+        typeof incomingData.text !== 'string' ||
+        incomingData.text.length > 500 ||
+        participants.length < 1 ||
+        participants.length > 2
+      ) {
+        return 'PERMISSION_DENIED';
+      }
+      if (incomingData.channelType === 'world') {
+        return incomingData.channelId === 'world' ? 'ALLOW' : 'PERMISSION_DENIED';
+      }
+      if (incomingData.channelType === 'dm') {
+        return participants.length === 2 && participants.includes(auth.uid)
+          ? 'ALLOW'
+          : 'PERMISSION_DENIED';
+      }
+      return 'PERMISSION_DENIED';
+    }
+    if (operation === 'update') {
+      return 'PERMISSION_DENIED';
+    }
+    if (operation === 'delete') {
+      return isSuperAdmin ? 'ALLOW' : 'PERMISSION_DENIED';
+    }
+  }
+
+  // 13. social_connections
+  if (collection === 'social_connections') {
+    const map = db.social_connections ?? {};
+    const existing = map[docId];
+    if (operation === 'get') {
+      if (!isVerified || !auth || !existing) return 'PERMISSION_DENIED';
+      const participants = Array.isArray(existing.participants) ? existing.participants : [];
+      return participants.includes(auth.uid) || isSuperAdmin ? 'ALLOW' : 'PERMISSION_DENIED';
+    }
+    if (operation === 'list') {
+      if (isSuperAdmin) return 'ALLOW';
+      if (!isVerified || !auth) return 'PERMISSION_DENIED';
+      const docs = Object.values(map);
+      return docs.every((c) => {
+        const participants = Array.isArray(c.participants) ? c.participants : [];
+        return participants.includes(auth.uid);
+      })
+        ? 'ALLOW'
+        : 'PERMISSION_DENIED';
+    }
+    if (operation === 'create') {
+      if (!isVerified || !auth || !incomingData) return 'PERMISSION_DENIED';
+      const participants = Array.isArray(incomingData.participants)
+        ? incomingData.participants
+        : [];
+      if (
+        incomingData.id !== docId ||
+        incomingData.requesterId !== auth.uid ||
+        incomingData.recipientId === auth.uid ||
+        incomingData.status !== 'pending' ||
+        participants.length !== 2 ||
+        !participants.includes(incomingData.requesterId) ||
+        !participants.includes(incomingData.recipientId) ||
+        incomingData.createdAt !== reqTime ||
+        incomingData.updatedAt !== reqTime
+      ) {
+        return 'PERMISSION_DENIED';
+      }
+      return 'ALLOW';
+    }
+    if (operation === 'update') {
+      if (!isVerified || !auth || !existing || !incomingData) return 'PERMISSION_DENIED';
+      if (
+        incomingData.id !== existing.id ||
+        incomingData.requesterId !== existing.requesterId ||
+        incomingData.recipientId !== existing.recipientId ||
+        JSON.stringify(incomingData.participants) !== JSON.stringify(existing.participants) ||
+        incomingData.createdAt !== existing.createdAt ||
+        incomingData.updatedAt !== reqTime
+      ) {
+        return 'PERMISSION_DENIED';
+      }
+      if (isSuperAdmin) return 'ALLOW';
+      if (
+        existing.status === 'pending' &&
+        incomingData.status === 'connected' &&
+        existing.recipientId === auth.uid &&
+        affectedKeysOnly(existing, incomingData, [
+          'status',
+          'recipientAvatarUrl',
+          'recipientAvatarVisibility',
+          'updatedAt',
+        ])
+      ) {
+        return 'ALLOW';
+      }
+      return 'PERMISSION_DENIED';
+    }
+    if (operation === 'delete') {
+      return isSuperAdmin ? 'ALLOW' : 'PERMISSION_DENIED';
     }
   }
 

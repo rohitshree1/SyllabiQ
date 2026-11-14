@@ -43,7 +43,17 @@ import {
   buildFallbackStudentAboutLines,
   normalizeStudentAboutLines,
 } from './verificationAndReferral';
-import { buildFallbackEthicsModule } from './skillRefreshAndEthics';
+import {
+  buildFallbackEthicsModule,
+  validateSocialMessageConduct,
+} from './skillRefreshAndEthics';
+import {
+  fetchSocialStateLocal,
+  postSocialMessageLocal,
+  requestOrAcceptSocialConnectionLocal,
+  updateSocialProfileVisibilityLocal,
+  updateSocialVaultPermissionLocal,
+} from './socialLocalFallback';
 
 async function fetchWithTimeout(
   url: string,
@@ -51,11 +61,11 @@ async function fetchWithTimeout(
   timeoutMs = 22000
 ): Promise<Response> {
   const controller = new AbortController();
-  const id = window.setTimeout(() => controller.abort(), timeoutMs);
+  const id = globalThis.setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...options, signal: controller.signal });
   } finally {
-    window.clearTimeout(id);
+    globalThis.clearTimeout(id);
   }
 }
 
@@ -926,22 +936,24 @@ export async function fetchSocialSyllabiQStateApi(): Promise<{
   connections: SocialConnection[];
   vaultGrants: SocialVaultGrant[];
   directory: SocialDirectoryPeer[];
+  backendAvailable: boolean;
 }> {
   try {
-    const res = await fetch('/api/social/state');
-    if (res.ok) {
-      const data = await res.json();
+    const res = await fetchWithTimeout('/api/social/state', { method: 'GET' }, 4500);
+    const data = res.ok ? await parseJsonSafely<Record<string, unknown>>(res) : null;
+    if (res.ok && data && (Array.isArray(data.messages) || Array.isArray(data.directory))) {
       return {
-        messages: Array.isArray(data?.messages) ? data.messages : [],
-        connections: Array.isArray(data?.connections) ? data.connections : [],
-        vaultGrants: Array.isArray(data?.vaultGrants) ? data.vaultGrants : [],
-        directory: Array.isArray(data?.directory) ? data.directory : [],
+        messages: Array.isArray(data.messages) ? (data.messages as SocialChatMessage[]) : [],
+        connections: Array.isArray(data.connections) ? (data.connections as SocialConnection[]) : [],
+        vaultGrants: Array.isArray(data.vaultGrants) ? (data.vaultGrants as SocialVaultGrant[]) : [],
+        directory: Array.isArray(data.directory) ? (data.directory as SocialDirectoryPeer[]) : [],
+        backendAvailable: true,
       };
     }
   } catch {
-    // Ignore offline fallback
+    // Fallback below for static hosting / GitHub Pages / offline
   }
-  return { messages: [], connections: [], vaultGrants: [], directory: [] };
+  return fetchSocialStateLocal();
 }
 
 export async function postSocialMessageApi(payload: {
@@ -954,28 +966,40 @@ export async function postSocialMessageApi(payload: {
   senderAvatarVisibility: AvatarVisibility;
   text: string;
   flexCard?: SocialFlexAttachment;
-}): Promise<{ message?: SocialChatMessage; error?: string }> {
-  try {
-    const res = await fetch('/api/social/message', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const data = await parseJsonSafely<Record<string, unknown>>(res);
-    if (!res.ok || !data) {
-      return {
-        error: String(
-          data?.error ||
-            (res.status === 404
-              ? 'Live chat backend is unavailable on static hosting.'
-              : 'Message rejected by conduct policy.')
-        ),
-      };
-    }
-    return { message: data?.message as SocialChatMessage };
-  } catch {
-    return { error: 'Network error sending Social SyllabiQ message.' };
+}): Promise<{ message?: SocialChatMessage; error?: string; usedStaticFallback?: boolean }> {
+  const validFlex = Boolean(
+    payload.flexCard && payload.flexCard.credentialCode && payload.flexCard.title
+  );
+  const conduct = validateSocialMessageConduct(String(payload.text || ''), validFlex);
+  if (!conduct.allowed) {
+    return {
+      error: conduct.violationReason || 'Message rejected by conduct policy.',
+    };
   }
+
+  try {
+    const res = await fetchWithTimeout(
+      '/api/social/message',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+      6000
+    );
+    const data = await parseJsonSafely<Record<string, unknown>>(res);
+    if (res.ok && data?.message) {
+      return { message: data.message as SocialChatMessage };
+    }
+    if (!res.ok && data && typeof data.error === 'string' && data.error.trim()) {
+      return { error: data.error };
+    }
+  } catch {
+    // Static host / offline fallback below
+  }
+
+  const localResult = postSocialMessageLocal(payload);
+  return { ...localResult, usedStaticFallback: true };
 }
 
 export async function updateSocialProfileVisibilityApi(payload: {
@@ -986,14 +1010,19 @@ export async function updateSocialProfileVisibilityApi(payload: {
   flexTier: FlexCardRarityTier;
   profileId?: string;
 }): Promise<void> {
+  updateSocialProfileVisibilityLocal(payload);
   try {
-    await fetch('/api/social/profile-visibility', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    await fetchWithTimeout(
+      '/api/social/profile-visibility',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+      4500
+    );
   } catch {
-    // Non-blocking
+    // Non-blocking on static hosting
   }
 }
 
@@ -1008,19 +1037,23 @@ export async function requestOrAcceptSocialConnectionApi(payload: {
   connectionId?: string;
 }): Promise<SocialConnection | null> {
   try {
-    const res = await fetch('/api/social/connect', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      return (data?.connection as SocialConnection) || null;
+    const res = await fetchWithTimeout(
+      '/api/social/connect',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+      5000
+    );
+    const data = res.ok ? await parseJsonSafely<Record<string, unknown>>(res) : null;
+    if (res.ok && data?.connection) {
+      return data.connection as SocialConnection;
     }
   } catch {
-    // Ignore
+    // Static host fallback below
   }
-  return null;
+  return requestOrAcceptSocialConnectionLocal(payload);
 }
 
 export async function updateSocialVaultPermissionApi(payload: {
@@ -1035,17 +1068,21 @@ export async function updateSocialVaultPermissionApi(payload: {
   reportCardSnapshot?: IssuedCredentialDoc | null;
 }): Promise<SocialVaultGrant | null> {
   try {
-    const res = await fetch('/api/social/vault-permission', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      return (data?.grant as SocialVaultGrant) || null;
+    const res = await fetchWithTimeout(
+      '/api/social/vault-permission',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+      5000
+    );
+    const data = res.ok ? await parseJsonSafely<Record<string, unknown>>(res) : null;
+    if (res.ok && data?.grant) {
+      return data.grant as SocialVaultGrant;
     }
   } catch {
-    // Ignore
+    // Static host fallback below
   }
-  return null;
+  return updateSocialVaultPermissionLocal(payload);
 }

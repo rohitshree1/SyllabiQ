@@ -50,10 +50,21 @@ import {
   generateScholarProfileId,
   normalizeProfileId,
 } from '../utils/verificationAndReferral';
+import {
+  acceptSocialConnectionInCloud,
+  publishSocialMessageInCloud,
+  requestSocialConnectionInCloud,
+  subscribeToSocialConnectionsInCloud,
+  subscribeToSocialDmMessagesInCloud,
+  subscribeToSocialProfilesInCloud,
+  subscribeToSocialWorldMessagesInCloud,
+  upsertSocialProfileInCloud,
+} from '../services/cloudService';
 
 interface SocialSyllabiQViewProps {
   state: AppState;
   ownerKey: string;
+  isCloudAuthenticated?: boolean;
   avatarUrl?: string;
   xpSnapshot: CandidateXpSnapshot;
   staleSubjects: SubjectRefreshStatus[];
@@ -81,6 +92,7 @@ function getInitials(name: string): string {
 export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
   state,
   ownerKey,
+  isCloudAuthenticated = false,
   avatarUrl,
   xpSnapshot,
   staleSubjects,
@@ -92,6 +104,7 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
 }) => {
   const [section, setSection] = useState<'world' | 'private'>('world');
   const [wsConnected, setWsConnected] = useState(false);
+  const [backendAvailable, setBackendAvailable] = useState(false);
 
   const [messages, setMessages] = useState<SocialChatMessage[]>([]);
   const [connections, setConnections] = useState<SocialConnection[]>([]);
@@ -166,20 +179,11 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
     });
   };
 
-  // Initial HTTP state sync + live WebSocket subscription with auto-reconnect
+  // Initial HTTP/local state sync + live WebSocket ONLY when Express backend is present
   useEffect(() => {
     let active = true;
     let ws: WebSocket | null = null;
     let reconnectTimer: number | null = null;
-
-    void fetchSocialSyllabiQStateApi().then((initial) => {
-      if (!active) return;
-      setMessages(initial.messages);
-      setConnections(initial.connections);
-      setVaultGrants(initial.vaultGrants);
-      setDirectory(initial.directory);
-    });
-
     let retryAttempt = 0;
 
     const connectSocket = () => {
@@ -259,7 +263,41 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
       };
     };
 
-    connectSocket();
+    void fetchSocialSyllabiQStateApi().then((initial) => {
+      if (!active) return;
+      setBackendAvailable(initial.backendAvailable);
+      setMessages((prev) => {
+        const map = new Map(prev.map((m) => [m.id, m]));
+        for (const m of initial.messages) map.set(m.id, m);
+        return Array.from(map.values()).slice(-200);
+      });
+      setConnections((prev) => {
+        const map = new Map(prev.map((c) => [c.id, c]));
+        for (const c of initial.connections) map.set(c.id, c);
+        return Array.from(map.values());
+      });
+      setVaultGrants(initial.vaultGrants);
+      setDirectory((prev) => {
+        const map = new Map(prev.map((d) => [d.userId, d]));
+        for (const d of initial.directory) map.set(d.userId, d);
+        return Array.from(map.values());
+      });
+
+      if (initial.backendAvailable) {
+        connectSocket();
+      } else {
+        // Register local scholar card into directory on static hosts
+        const ident = latestIdentityRef.current;
+        void updateSocialProfileVisibilityApi({
+          userId: ident.ownerKey,
+          profileId: ident.profileId,
+          displayName: ident.candidateName,
+          avatarUrl: ident.avatarUrl,
+          avatarVisibility: ident.avatarVisibility,
+          flexTier: ident.flexTier,
+        });
+      }
+    });
 
     return () => {
       active = false;
@@ -270,6 +308,64 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
       }
     };
   }, [ownerKey]);
+
+  // Real-time Cloud Firestore Social Sync for verified Firebase scholars (cross-browser on GitHub Pages)
+  useEffect(() => {
+    if (!isCloudAuthenticated || !ownerKey || ownerKey === 'sandbox-candidate') return;
+
+    const ident = latestIdentityRef.current;
+    void upsertSocialProfileInCloud({
+      userId: ident.ownerKey,
+      profileId: ident.profileId,
+      displayName: ident.candidateName,
+      avatarUrl: ident.avatarUrl,
+      avatarVisibility: ident.avatarVisibility,
+      flexTier: ident.flexTier,
+    });
+
+    const unsubProfiles = subscribeToSocialProfilesInCloud((cloudPeers) => {
+      setDirectory((prev) => {
+        const map = new Map(prev.map((p) => [p.userId, p]));
+        for (const p of cloudPeers) map.set(p.userId, p);
+        return Array.from(map.values());
+      });
+    });
+
+    const unsubWorld = subscribeToSocialWorldMessagesInCloud((cloudMsgs) => {
+      setMessages((prev) => {
+        const map = new Map(prev.map((m) => [m.id, m]));
+        for (const m of cloudMsgs) map.set(m.id, m);
+        return Array.from(map.values())
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+          .slice(-200);
+      });
+    });
+
+    const unsubDm = subscribeToSocialDmMessagesInCloud(ownerKey, (cloudDms) => {
+      setMessages((prev) => {
+        const map = new Map(prev.map((m) => [m.id, m]));
+        for (const m of cloudDms) map.set(m.id, m);
+        return Array.from(map.values())
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+          .slice(-200);
+      });
+    });
+
+    const unsubConns = subscribeToSocialConnectionsInCloud(ownerKey, (cloudConns) => {
+      setConnections((prev) => {
+        const map = new Map(prev.map((c) => [c.id, c]));
+        for (const c of cloudConns) map.set(c.id, c);
+        return Array.from(map.values());
+      });
+    });
+
+    return () => {
+      unsubProfiles();
+      unsubWorld();
+      unsubDm();
+      unsubConns();
+    };
+  }, [isCloudAuthenticated, ownerKey]);
 
   // Sync profile visibility & avatar updates to server directory (delegated to App handler)
   const handleToggleAvatarVisibility = (nextVis: AvatarVisibility) => {
@@ -396,6 +492,14 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
     );
   }, [messages, activeChannelMeta]);
 
+  const messagesFeedRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = messagesFeedRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [visibleChannelMessages.length, activeChannelMeta?.channelId]);
+
   // Search filter for scholars by Profile ID or Name in World section
   const matchedScholars = useMemo(() => {
     const raw = profileIdSearch.trim();
@@ -466,6 +570,22 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
       if (res.message) {
         upsertMessage(res.message);
       }
+
+      if (isCloudAuthenticated && ownerKey !== 'sandbox-candidate') {
+        void publishSocialMessageInCloud({
+          id: msgId,
+          channelType: activeChannelMeta.channelType,
+          channelId: activeChannelMeta.channelId,
+          peerId: activeChannelMeta.peer?.peerId,
+          senderId: ownerKey,
+          senderName: candidateName,
+          senderAvatarUrl: avatarUrl,
+          senderAvatarVisibility: avatarVisibility,
+          text: conductCheck.sanitizedText,
+          flexCard: flexAttachment,
+        });
+      }
+
       setDraftText('');
       setSelectedFlexSerial('');
     } finally {
@@ -474,6 +594,26 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
   };
 
   const handleConnectPeer = async (peerId: string, peerName: string) => {
+    const isSeededDemoPeer = ['cand-ananya-02', 'cand-kabir-03', 'cand-meera-04'].includes(peerId);
+    if (isCloudAuthenticated && ownerKey !== 'sandbox-candidate' && !isSeededDemoPeer) {
+      const cloudConn = await requestSocialConnectionInCloud({
+        requesterId: ownerKey,
+        requesterName: candidateName,
+        requesterAvatarUrl: avatarUrl,
+        requesterAvatarVisibility: avatarVisibility,
+        recipientId: peerId,
+        recipientName: peerName,
+      });
+      if (cloudConn) {
+        upsertConnection(cloudConn);
+        if (cloudConn.status === 'connected') {
+          setSection('private');
+          setSelectedPeerId(peerId);
+        }
+        return;
+      }
+    }
+
     const conn = await requestOrAcceptSocialConnectionApi({
       action: 'request',
       requesterId: ownerKey,
@@ -493,6 +633,13 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
   };
 
   const handleAcceptPendingRequest = async (conn: SocialConnection) => {
+    if (isCloudAuthenticated && ownerKey !== 'sandbox-candidate' && conn.id.startsWith('conn_')) {
+      await acceptSocialConnectionInCloud({
+        connectionId: conn.id,
+        recipientAvatarUrl: avatarUrl,
+        recipientAvatarVisibility: avatarVisibility,
+      });
+    }
     const updated = await requestOrAcceptSocialConnectionApi({
       action: 'accept',
       connectionId: conn.id,
@@ -676,7 +823,13 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
               <span>1-on-1 Private Conversations</span>
               <span aria-hidden="true">·</span>
               <span className="font-mono tabular-nums">
-                {wsConnected ? 'Live Socket Synced' : 'HTTP Sync Active'}
+                {wsConnected
+                  ? 'Live Socket Synced'
+                  : isCloudAuthenticated
+                  ? 'Cloud Firestore Live'
+                  : backendAvailable
+                  ? 'HTTP Sync Active'
+                  : 'Local Storage Synced'}
               </span>
             </div>
             <h2 className="font-display text-2xl font-bold text-slate-900">
@@ -1167,7 +1320,7 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
                     <p className="text-xs text-slate-500">{activeChannelMeta.subtitle}</p>
                   </div>
 
-                  {activeDmPeer && (
+                  {section === 'private' && activeDmPeer && (
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-xs font-bold text-sky-800 bg-sky-50 border border-sky-200 rounded px-2 py-0.5">
                         {activeDmPeer.profileId}
@@ -1177,7 +1330,10 @@ export const SocialSyllabiQView: React.FC<SocialSyllabiQViewProps> = ({
                 </div>
 
                 {/* Messages Feed */}
-                <div className="max-h-[420px] overflow-y-auto space-y-3 pr-1">
+                <div
+                  ref={messagesFeedRef}
+                  className="max-h-[420px] overflow-y-auto space-y-3 pr-1"
+                >
                   {visibleChannelMessages.length === 0 ? (
                     <div className="py-10 text-center text-xs text-slate-500">
                       No messages in <strong>{activeChannelMeta.title}</strong> yet. Share a study check-in or attach one of your verified FlexCards below.

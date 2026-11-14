@@ -34,6 +34,7 @@ import type {
   AdminDigestEntry,
   AppState,
   AuthenticatedAccount,
+  AvatarVisibility,
   CandidateSummaryDoc,
   CredentialVerificationNotice,
   FlexCardRarityTier,
@@ -42,6 +43,10 @@ import type {
   IndividualBonusDoc,
   IndividualBonusType,
   IssuedCredentialDoc,
+  SocialChatMessage,
+  SocialConnection,
+  SocialDirectoryPeer,
+  SocialFlexAttachment,
   StaffAccessProfile,
   StaffInviteDoc,
   VerifierPostRole,
@@ -52,10 +57,16 @@ import {
   buildSanitizedCandidateSummary,
   buildSanitizedWorkspacePayload,
   clampInt,
+  DEMO_PLACEHOLDER_EMAIL,
   emailToInviteKey,
+  isDemoPlaceholderStudentName,
+  isSuperAdminCandidateRecord,
+  isSuperAdminEmail,
+  resolveAuthenticatedDisplayName,
   sanitizeText,
   stripUndefinedDeep,
 } from '../utils/firestoreValidators';
+import { generateScholarProfileId } from '../utils/verificationAndReferral';
 
 function timestampToISO(val: unknown): string {
   if (val instanceof Timestamp) {
@@ -131,7 +142,7 @@ export function mapFirebaseUserToAccount(user: User): AuthenticatedAccount {
   return {
     uid: user.uid,
     email: user.email || '',
-    displayName: user.displayName || user.email?.split('@')[0] || 'Scholar',
+    displayName: resolveAuthenticatedDisplayName(user),
     photoURL: user.photoURL || undefined,
     providerId,
     emailVerified: Boolean(user.emailVerified),
@@ -368,22 +379,35 @@ export async function hydrateOrBootstrapCandidateCloud(
 
   // 2. Read or create /candidates/{uid}
   const candRef = doc(db, 'candidates', uid);
+  const isSuperAdmin = isSuperAdminEmail(user.email);
+  const authDisplayName = resolveAuthenticatedDisplayName(user);
+  const sanitizedLocalStudentEmail =
+    !localState.student?.email ||
+    localState.student.email.trim().toLowerCase() === DEMO_PLACEHOLDER_EMAIL
+      ? cleanAuthEmail
+      : localState.student.email;
+  const sanitizedLocalStudentName = isDemoPlaceholderStudentName(localState.student?.name)
+    ? authDisplayName
+    : localState.student.name;
+  const sanitizedLocalState: AppState = {
+    ...localState,
+    student: {
+      ...localState.student,
+      name: sanitizedLocalStudentName,
+      email: sanitizedLocalStudentEmail,
+      avatarUrl: localState.student?.avatarUrl || user.photoURL || undefined,
+    },
+  };
+
   let summaryDoc: CandidateSummaryDoc;
 
   try {
     const candSnap = await getDoc(candRef);
     if (!candSnap.exists()) {
-      const enrichedState: AppState = {
-        ...localState,
-        student: {
-          ...localState.student,
-          email: localState.student.email || user.email || '',
-        },
-      };
       const baseSummary = buildSanitizedCandidateSummary({
         ownerUid: uid,
-        fallbackName: user.displayName || 'Scholar',
-        state: enrichedState,
+        fallbackName: authDisplayName,
+        state: sanitizedLocalState,
         existingBonusPoints: 0,
         existingBanned: false,
         existingBanReason: '',
@@ -402,19 +426,56 @@ export async function hydrateOrBootstrapCandidateCloud(
         updatedAt: new Date().toISOString(),
       };
     } else {
+      const existingData = candSnap.data();
       summaryDoc = parseCandidateSummaryFromFirestore(
         uid,
-        candSnap.data(),
+        existingData,
         { email: user.email || undefined, authProvider: providerId },
-        user.displayName || 'Scholar'
+        authDisplayName
       );
+
+      // Heal accidental Super Admin ban AND overwrite leftover "Aarav Mehta" placeholder name
+      const needsUnbanHeal = isSuperAdmin && Boolean(existingData.banned);
+      const needsNameHeal = isDemoPlaceholderStudentName(existingData.displayName);
+      const needsEmailHeal =
+        isSuperAdmin &&
+        (!existingData.contactEmail ||
+          String(existingData.contactEmail).trim().toLowerCase() !== cleanAuthEmail.toLowerCase());
+
+      if (needsUnbanHeal) {
+        summaryDoc.banned = false;
+        summaryDoc.banReason = '';
+      }
+      if (needsNameHeal) {
+        summaryDoc.displayName = authDisplayName;
+      }
+      if (needsEmailHeal) {
+        summaryDoc.contactEmail = cleanAuthEmail;
+        summaryDoc.email = cleanAuthEmail;
+      }
+
+      if (needsUnbanHeal || needsNameHeal || needsEmailHeal) {
+        try {
+          await updateDoc(
+            candRef,
+            stripUndefinedDeep({
+              ...(needsUnbanHeal ? { banned: false, banReason: '' } : {}),
+              ...(needsNameHeal ? { displayName: authDisplayName } : {}),
+              ...(needsEmailHeal ? { contactEmail: cleanAuthEmail } : {}),
+              updatedAt: serverTimestamp(),
+            })
+          );
+        } catch (healErr) {
+          console.warn('Non-fatal candidate self-heal notice:', healErr);
+        }
+      }
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, `candidates/${uid}`);
   }
 
-  // If account is banned, do not write workspace; return summary immediately so UI locks cleanly
-  if (summaryDoc.banned) {
+  // If non-Super-Admin account is banned, do not write workspace; return summary immediately so UI locks cleanly
+  if (summaryDoc.banned && !isSuperAdmin) {
     return { summary: summaryDoc, workspaceState: null };
   }
 
@@ -425,9 +486,21 @@ export async function hydrateOrBootstrapCandidateCloud(
     if (wsSnap.exists()) {
       const ws = wsSnap.data();
       if (ws && ws.onboarded && Array.isArray(ws.topics)) {
+        const existingWsStudent = (ws.student || {}) as AppState['student'];
+        const wsNameNeedsHeal = isDemoPlaceholderStudentName(existingWsStudent.name);
+        const wsEmailNeedsHeal =
+          !existingWsStudent.email ||
+          existingWsStudent.email.trim().toLowerCase() === DEMO_PLACEHOLDER_EMAIL;
+
+        const cleanedStudent: AppState['student'] = {
+          ...existingWsStudent,
+          name: wsNameNeedsHeal ? authDisplayName : existingWsStudent.name,
+          email: wsEmailNeedsHeal ? cleanAuthEmail : existingWsStudent.email,
+        };
+
         const hydrated: AppState = {
           onboarded: Boolean(ws.onboarded),
-          student: ws.student,
+          student: cleanedStudent,
           subjects: ws.subjects || [],
           topics: ws.topics || [],
           schedule: ws.schedule || [],
@@ -437,12 +510,28 @@ export async function hydrateOrBootstrapCandidateCloud(
           focusSessionsCompleted: Number(ws.focusSessionsCompleted || 0),
           focusMinutesTotal: Number(ws.focusMinutesTotal || 0),
         };
+
+        if (wsNameNeedsHeal || wsEmailNeedsHeal) {
+          try {
+            const healedPayload = buildSanitizedWorkspacePayload(uid, hydrated);
+            const wsCreatedAt =
+              ws.createdAt instanceof Timestamp ? ws.createdAt : serverTimestamp();
+            await setDoc(wsRef, {
+              ...healedPayload,
+              createdAt: wsCreatedAt,
+              updatedAt: serverTimestamp(),
+            });
+          } catch (wsHealErr) {
+            console.warn('Non-fatal workspace name heal notice:', wsHealErr);
+          }
+        }
+
         return { summary: summaryDoc, workspaceState: hydrated };
       }
     }
 
-    if (localState.onboarded) {
-      const wsPayload = buildSanitizedWorkspacePayload(uid, localState);
+    if (sanitizedLocalState.onboarded) {
+      const wsPayload = buildSanitizedWorkspacePayload(uid, sanitizedLocalState);
       if (!wsSnap.exists()) {
         await setDoc(wsRef, {
           ...wsPayload,
@@ -469,8 +558,28 @@ export async function syncCandidateWorkspaceToCloud(params: {
   state: AppState;
   currentSummary: CandidateSummaryDoc | null;
 }): Promise<void> {
-  const { uid, fallbackName, state, currentSummary } = params;
-  if (currentSummary?.banned) return;
+  const { uid, fallbackName, currentSummary } = params;
+  const isSuperAdmin = isSuperAdminEmail(auth.currentUser?.email);
+  if (currentSummary?.banned && !isSuperAdmin) return;
+
+  const resolvedFallbackName = resolveAuthenticatedDisplayName({
+    displayName: fallbackName,
+    email: auth.currentUser?.email,
+  });
+  const state: AppState = {
+    ...params.state,
+    student: {
+      ...params.state.student,
+      name: isDemoPlaceholderStudentName(params.state.student?.name)
+        ? resolvedFallbackName
+        : params.state.student.name,
+      email:
+        !params.state.student?.email ||
+        params.state.student.email.trim().toLowerCase() === DEMO_PLACEHOLDER_EMAIL
+          ? auth.currentUser?.email || ''
+          : params.state.student.email,
+    },
+  };
 
   const candRef = doc(db, 'candidates', uid);
   const wsRef = doc(db, 'workspaces', uid);
@@ -503,7 +612,7 @@ export async function syncCandidateWorkspaceToCloud(params: {
     }
   } else {
     const existingData = candSnap.data();
-    if (Boolean(existingData.banned)) {
+    if (Boolean(existingData.banned) && !isSuperAdmin) {
       return;
     }
 
@@ -517,10 +626,11 @@ export async function syncCandidateWorkspaceToCloud(params: {
       hasExistingDeductedKey && Number.isFinite(existingData.deductedPoints)
         ? Math.max(0, Math.min(BLUEPRINT_LIMITS.totalBonusPointsMax, existingData.deductedPoints))
         : 0;
-    const existingBanReason =
-      typeof existingData.banReason === 'string'
-        ? existingData.banReason.slice(0, BLUEPRINT_LIMITS.banReasonMax)
-        : '';
+    const existingBanReason = isSuperAdmin
+      ? ''
+      : typeof existingData.banReason === 'string'
+      ? existingData.banReason.slice(0, BLUEPRINT_LIMITS.banReasonMax)
+      : '';
     const hasExistingAdsKey =
       'adsEnabled' in existingData && typeof existingData.adsEnabled === 'boolean';
     const preservedCreatedAt =
@@ -532,7 +642,7 @@ export async function syncCandidateWorkspaceToCloud(params: {
 
     const baseCleanSummary = buildSanitizedCandidateSummary({
       ownerUid: preservedOwnerUid,
-      fallbackName,
+      fallbackName: resolvedFallbackName,
       state,
       existingBonusPoints: Math.trunc(existingBonusPoints),
       existingDeductedPoints: Math.trunc(existingDeductedPoints),
@@ -801,17 +911,19 @@ export async function fetchCandidatesForStaff(params: {
         });
       }
 
-      const roster: CandidateSummaryDoc[] = candSnap.docs.map((docSnap) => {
-        const d = docSnap.data();
-        const ownerUid = String(d.ownerUid || docSnap.id);
-        const pii = piiByUid.get(ownerUid);
-        return parseCandidateSummaryFromFirestore(ownerUid, d, pii);
-      });
+      const parsedRoster: CandidateSummaryDoc[] = candSnap.docs
+        .map((docSnap) => {
+          const d = docSnap.data();
+          const ownerUid = String(d.ownerUid || docSnap.id);
+          const pii = piiByUid.get(ownerUid);
+          return parseCandidateSummaryFromFirestore(ownerUid, d, pii);
+        })
+        .filter((c) => !isSuperAdminCandidateRecord(c, params.staffUid));
 
       // Sync bounded O(1) AdminDigest overview so delegated Sub-Admins also receive full candidate academic + outreach profiles without O(n) list queries
-      const digestRef = doc(db, 'admin_digests', 'overview');
+      // Super Admin identity & details are strictly excluded from both the live roster and AdminDigest.
       const entries: AdminDigestEntry[] = stripUndefinedDeep(
-        roster.slice(0, BLUEPRINT_LIMITS.digestEntriesMaxCount).map((c) => ({
+        parsedRoster.slice(0, BLUEPRINT_LIMITS.digestEntriesMaxCount).map((c) => ({
           ownerUid: c.ownerUid,
           displayName: c.displayName,
           email: c.email || c.contactEmail || '',
@@ -844,24 +956,36 @@ export async function fetchCandidatesForStaff(params: {
         }))
       );
 
-      const digestSnap = await getDoc(digestRef);
-      if (!digestSnap.exists()) {
-        await setDoc(digestRef, {
-          digestId: 'overview',
-          entries,
-          updatedByUid: params.staffUid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        await updateDoc(digestRef, {
-          entries,
-          updatedByUid: params.staffUid,
-          updatedAt: serverTimestamp(),
-        });
+      try {
+        const digestRef = doc(db, 'admin_digests', 'overview');
+        const digestSnap = await getDoc(digestRef);
+        if (!digestSnap.exists()) {
+          await setDoc(digestRef, {
+            digestId: 'overview',
+            entries,
+            updatedByUid: params.staffUid,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          const existingDigest = digestSnap.data();
+          const digestCreatedAt =
+            existingDigest.createdAt instanceof Timestamp
+              ? existingDigest.createdAt
+              : serverTimestamp();
+          await updateDoc(digestRef, {
+            entries,
+            updatedByUid: params.staffUid,
+            createdAt: digestCreatedAt,
+            updatedAt: serverTimestamp(),
+          });
+        }
+      } catch (digestError) {
+        // Non-fatal: still return the Super Admin's candidate roster even if digest write fails transiently
+        console.warn('Non-fatal AdminDigest overview sync notice:', digestError);
       }
 
-      return roster;
+      return parsedRoster;
     } catch (error) {
       handleFirestoreError(error, OperationType.LIST, 'candidates');
     }
@@ -872,14 +996,16 @@ export async function fetchCandidatesForStaff(params: {
     const digestSnap = await getDoc(doc(db, 'admin_digests', 'overview'));
     if (!digestSnap.exists()) return [];
     const entries = (digestSnap.data().entries || []) as AdminDigestEntry[];
-    return entries.map((e) => ({
-      ...e,
-      examDate: e.examDate || '',
-      completedChapters: e.completedChapters ?? 0,
-      totalChapters: e.totalChapters ?? 0,
-      focusMinutesLogged: e.focusMinutesLogged ?? 0,
-      adsEnabled: false,
-    }));
+    return entries
+      .filter((e) => !isSuperAdminCandidateRecord(e))
+      .map((e) => ({
+        ...e,
+        examDate: e.examDate || '',
+        completedChapters: e.completedChapters ?? 0,
+        totalChapters: e.totalChapters ?? 0,
+        focusMinutesLogged: e.focusMinutesLogged ?? 0,
+        adsEnabled: false,
+      }));
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, 'admin_digests/overview');
   }
@@ -891,6 +1017,9 @@ export async function lookupSingleCandidateForStaff(
 ): Promise<CandidateSummaryDoc | null> {
   const cleanId = targetUid.trim();
   if (!cleanId) return null;
+  if (auth.currentUser && cleanId === auth.currentUser.uid && isSuperAdminEmail(auth.currentUser.email)) {
+    return null;
+  }
   try {
     const snap = await getDoc(doc(db, 'candidates', cleanId));
     if (!snap.exists()) return null;
@@ -909,7 +1038,11 @@ export async function lookupSingleCandidateForStaff(
       // Fallback to candidate contactEmail if users_private is unavailable
     }
 
-    return parseCandidateSummaryFromFirestore(cleanId, d, { email, authProvider });
+    const parsed = parseCandidateSummaryFromFirestore(cleanId, d, { email, authProvider });
+    if (isSuperAdminCandidateRecord(parsed)) {
+      return null;
+    }
+    return parsed;
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, `candidates/${cleanId}`);
   }
@@ -920,6 +1053,14 @@ export async function setCandidateBanInCloud(params: {
   banned: boolean;
   banReason: string;
 }): Promise<void> {
+  if (
+    params.banned &&
+    auth.currentUser &&
+    auth.currentUser.uid === params.targetUid &&
+    isSuperAdminEmail(auth.currentUser.email)
+  ) {
+    throw new Error('The Primary Super Admin account cannot be suspended.');
+  }
   try {
     await updateDoc(doc(db, 'candidates', params.targetUid), {
       banned: Boolean(params.banned),
@@ -1033,22 +1174,24 @@ export async function grantIndividualBonusInCloud(params: {
 export async function fetchStaffInvitesInCloud(): Promise<StaffInviteDoc[]> {
   try {
     const snap = await getDocs(query(collection(db, 'staff_invites'), limit(40)));
-    return snap.docs.map((docSnap) => {
-      const d = docSnap.data();
-      return {
-        inviteKey: String(d.inviteKey || docSnap.id),
-        targetEmail: String(d.targetEmail || ''),
-        adminPhone: String(d.adminPhone || ''),
-        displayName: String(d.displayName || 'Sub-Admin'),
-        canPostUpdates: Boolean(d.canPostUpdates),
-        canGrantBonuses: Boolean(d.canGrantBonuses),
-        canBanUsers: Boolean(d.canBanUsers),
-        status: d.status === 'revoked' ? 'revoked' : 'active',
-        createdByUid: String(d.createdByUid || ''),
-        createdAt: timestampToISO(d.createdAt),
-        updatedAt: timestampToISO(d.updatedAt),
-      };
-    });
+    return snap.docs
+      .map((docSnap) => {
+        const d = docSnap.data();
+        return {
+          inviteKey: String(d.inviteKey || docSnap.id),
+          targetEmail: String(d.targetEmail || ''),
+          adminPhone: String(d.adminPhone || ''),
+          displayName: String(d.displayName || 'Sub-Admin'),
+          canPostUpdates: Boolean(d.canPostUpdates),
+          canGrantBonuses: Boolean(d.canGrantBonuses),
+          canBanUsers: Boolean(d.canBanUsers),
+          status: d.status === 'revoked' ? 'revoked' : 'active',
+          createdByUid: String(d.createdByUid || ''),
+          createdAt: timestampToISO(d.createdAt),
+          updatedAt: timestampToISO(d.updatedAt),
+        } satisfies StaffInviteDoc;
+      })
+      .filter((inv) => !isSuperAdminEmail(inv.targetEmail));
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, 'staff_invites');
   }
@@ -1350,5 +1493,418 @@ export async function acknowledgeCredentialVerificationInCloud(
       OperationType.UPDATE,
       `credential_verifications/${verificationId}`
     );
+  }
+}
+
+// =============================================================================
+// Social SyllabiQ Cloud Firestore Helpers (Zero-PII World + 1-on-1 Private)
+// =============================================================================
+
+export async function upsertSocialProfileInCloud(params: {
+  userId: string;
+  displayName: string;
+  avatarUrl?: string;
+  avatarVisibility: AvatarVisibility;
+  flexTier: FlexCardRarityTier;
+  profileId?: string;
+}): Promise<void> {
+  if (!auth.currentUser || !auth.currentUser.emailVerified || auth.currentUser.uid !== params.userId) {
+    return;
+  }
+  const ref = doc(db, 'social_profiles', params.userId);
+  const cleanAvatar =
+    typeof params.avatarUrl === 'string' &&
+    params.avatarUrl.length > 0 &&
+    params.avatarUrl.length <= 350000
+      ? params.avatarUrl
+      : undefined;
+  const cleanName = sanitizeText(params.displayName, BLUEPRINT_LIMITS.displayNameMax, 'Scholar');
+  const vis: AvatarVisibility =
+    params.avatarVisibility === 'connections_only' ? 'connections_only' : 'world';
+  const tier = sanitizeText(params.flexTier, 40, 'Common Slate');
+  const profileId = sanitizeText(
+    params.profileId || generateScholarProfileId(params.userId),
+    40,
+    generateScholarProfileId(params.userId)
+  );
+
+  try {
+    const snap = await getDoc(ref);
+    if (!snap.exists()) {
+      await setDoc(
+        ref,
+        stripUndefinedDeep({
+          userId: params.userId,
+          profileId,
+          displayName: cleanName,
+          avatarUrl: cleanAvatar,
+          avatarVisibility: vis,
+          flexTier: tier,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+      );
+    } else {
+      await updateDoc(
+        ref,
+        stripUndefinedDeep({
+          displayName: cleanName,
+          avatarUrl: cleanAvatar,
+          avatarVisibility: vis,
+          flexTier: tier,
+          updatedAt: serverTimestamp(),
+        })
+      );
+    }
+  } catch (error) {
+    if (isTransientFirestoreOfflineError(error)) return;
+    handleFirestoreError(error, OperationType.WRITE, `social_profiles/${params.userId}`);
+  }
+}
+
+export function subscribeToSocialProfilesInCloud(
+  onUpdate: (profiles: SocialDirectoryPeer[]) => void
+): Unsubscribe {
+  const q = query(collection(db, 'social_profiles'), limit(100));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list: SocialDirectoryPeer[] = snap.docs.map((docSnap) => {
+        const d = docSnap.data();
+        const uid = String(d.userId || docSnap.id);
+        return {
+          userId: uid,
+          profileId: String(d.profileId || generateScholarProfileId(uid)),
+          displayName: String(d.displayName || 'Scholar'),
+          avatarUrl: typeof d.avatarUrl === 'string' && d.avatarUrl ? d.avatarUrl : undefined,
+          avatarVisibility:
+            d.avatarVisibility === 'connections_only' ? 'connections_only' : 'world',
+          flexTier: (d.flexTier as FlexCardRarityTier) || 'Common Slate',
+          online: true,
+        };
+      });
+      onUpdate(list);
+    },
+    (error) => {
+      if (isTransientFirestoreOfflineError(error)) return;
+      handleFirestoreError(error, OperationType.LIST, 'social_profiles');
+    }
+  );
+}
+
+function mapSocialMessageDoc(docId: string, d: Record<string, unknown>): SocialChatMessage {
+  const rawFlex =
+    d.flexCard && typeof d.flexCard === 'object' && !Array.isArray(d.flexCard)
+      ? (d.flexCard as Record<string, unknown>)
+      : null;
+
+  const flexCard: SocialFlexAttachment | undefined =
+    rawFlex && rawFlex.credentialCode && rawFlex.title
+      ? {
+          credentialCode: String(rawFlex.credentialCode),
+          title: String(rawFlex.title),
+          metricBadge: String(rawFlex.metricBadge || 'Verified Distinction'),
+          xpPoints: Number(rawFlex.xpPoints || 0),
+          flexTier: (rawFlex.flexTier as FlexCardRarityTier) || 'Common Slate',
+          boardOrUniversity: String(rawFlex.boardOrUniversity || 'University'),
+          examName: String(rawFlex.examName || 'Finals'),
+          needsSkillRefresh: Boolean(rawFlex.needsSkillRefresh),
+          staleSubjectNames: Array.isArray(rawFlex.staleSubjectNames)
+            ? rawFlex.staleSubjectNames.map((s) => String(s))
+            : undefined,
+        }
+      : undefined;
+
+  return {
+    id: String(d.id || docId),
+    channelType: d.channelType === 'dm' ? 'dm' : 'world',
+    channelId: String(d.channelId || 'world'),
+    senderId: String(d.senderId || ''),
+    senderName: String(d.senderName || 'Scholar'),
+    senderAvatarUrl:
+      typeof d.senderAvatarUrl === 'string' && d.senderAvatarUrl ? d.senderAvatarUrl : undefined,
+    senderAvatarVisibility:
+      d.senderAvatarVisibility === 'connections_only' ? 'connections_only' : 'world',
+    text: String(d.text || ''),
+    flexCard,
+    createdAt: timestampToISO(d.createdAt),
+  };
+}
+
+export function subscribeToSocialWorldMessagesInCloud(
+  onUpdate: (messages: SocialChatMessage[]) => void
+): Unsubscribe {
+  const q = query(
+    collection(db, 'social_messages'),
+    where('channelType', '==', 'world'),
+    limit(100)
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs
+        .map((docSnap) => mapSocialMessageDoc(docSnap.id, docSnap.data()))
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      onUpdate(list);
+    },
+    (error) => {
+      if (isTransientFirestoreOfflineError(error)) return;
+      handleFirestoreError(error, OperationType.LIST, 'social_messages');
+    }
+  );
+}
+
+export function subscribeToSocialDmMessagesInCloud(
+  uid: string,
+  onUpdate: (messages: SocialChatMessage[]) => void
+): Unsubscribe {
+  const q = query(
+    collection(db, 'social_messages'),
+    where('participants', 'array-contains', uid),
+    limit(100)
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs
+        .map((docSnap) => mapSocialMessageDoc(docSnap.id, docSnap.data()))
+        .filter((m) => m.channelType === 'dm')
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      onUpdate(list);
+    },
+    (error) => {
+      if (isTransientFirestoreOfflineError(error)) return;
+      handleFirestoreError(error, OperationType.LIST, 'social_messages');
+    }
+  );
+}
+
+export async function publishSocialMessageInCloud(params: {
+  id: string;
+  channelType: 'world' | 'dm';
+  channelId: string;
+  peerId?: string;
+  senderId: string;
+  senderName: string;
+  senderAvatarUrl?: string;
+  senderAvatarVisibility: AvatarVisibility;
+  text: string;
+  flexCard?: SocialFlexAttachment;
+}): Promise<void> {
+  if (!auth.currentUser || !auth.currentUser.emailVerified || auth.currentUser.uid !== params.senderId) {
+    return;
+  }
+
+  const participants =
+    params.channelType === 'dm' && params.peerId && params.peerId !== params.senderId
+      ? [params.senderId, params.peerId].sort()
+      : [params.senderId];
+
+  const cleanAvatar =
+    typeof params.senderAvatarUrl === 'string' &&
+    params.senderAvatarUrl.length > 0 &&
+    params.senderAvatarUrl.length <= 350000
+      ? params.senderAvatarUrl
+      : undefined;
+
+  const cleanFlex = params.flexCard
+    ? stripUndefinedDeep({
+        credentialCode: sanitizeText(params.flexCard.credentialCode, 40, '').toUpperCase(),
+        title: sanitizeText(params.flexCard.title, 120, 'Verified FlexCard'),
+        metricBadge: sanitizeText(params.flexCard.metricBadge, 80, 'Verified Distinction'),
+        xpPoints: clampInt(params.flexCard.xpPoints, 0, 500000),
+        flexTier: sanitizeText(params.flexCard.flexTier, 40, 'Common Slate'),
+        boardOrUniversity: sanitizeText(params.flexCard.boardOrUniversity, 100, 'University'),
+        examName: sanitizeText(params.flexCard.examName, 100, 'Finals'),
+        needsSkillRefresh: Boolean(params.flexCard.needsSkillRefresh),
+        staleSubjectNames: Array.isArray(params.flexCard.staleSubjectNames)
+          ? params.flexCard.staleSubjectNames.slice(0, 4).map((s) => sanitizeText(s, 60, ''))
+          : undefined,
+      })
+    : undefined;
+
+  try {
+    await setDoc(
+      doc(db, 'social_messages', params.id),
+      stripUndefinedDeep({
+        id: params.id,
+        channelType: params.channelType === 'dm' ? 'dm' : 'world',
+        channelId: sanitizeText(params.channelId, 128, 'world'),
+        participants,
+        senderId: params.senderId,
+        senderName: sanitizeText(params.senderName, BLUEPRINT_LIMITS.displayNameMax, 'Scholar'),
+        senderAvatarUrl: cleanAvatar,
+        senderAvatarVisibility:
+          params.senderAvatarVisibility === 'connections_only' ? 'connections_only' : 'world',
+        text: sanitizeText(params.text, 500, ''),
+        flexCard: cleanFlex,
+        createdAt: serverTimestamp(),
+      })
+    );
+  } catch (error) {
+    if (isTransientFirestoreOfflineError(error)) return;
+    handleFirestoreError(error, OperationType.CREATE, `social_messages/${params.id}`);
+  }
+}
+
+export function subscribeToSocialConnectionsInCloud(
+  uid: string,
+  onUpdate: (connections: SocialConnection[]) => void
+): Unsubscribe {
+  const q = query(
+    collection(db, 'social_connections'),
+    where('participants', 'array-contains', uid),
+    limit(60)
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list: SocialConnection[] = snap.docs.map((docSnap) => {
+        const d = docSnap.data();
+        return {
+          id: String(d.id || docSnap.id),
+          requesterId: String(d.requesterId || ''),
+          requesterName: String(d.requesterName || 'Scholar'),
+          requesterAvatarUrl:
+            typeof d.requesterAvatarUrl === 'string' && d.requesterAvatarUrl
+              ? d.requesterAvatarUrl
+              : undefined,
+          requesterAvatarVisibility:
+            d.requesterAvatarVisibility === 'connections_only' ? 'connections_only' : 'world',
+          recipientId: String(d.recipientId || ''),
+          recipientName: String(d.recipientName || 'Scholar'),
+          recipientAvatarUrl:
+            typeof d.recipientAvatarUrl === 'string' && d.recipientAvatarUrl
+              ? d.recipientAvatarUrl
+              : undefined,
+          recipientAvatarVisibility:
+            d.recipientAvatarVisibility === 'connections_only' ? 'connections_only' : 'world',
+          status: d.status === 'connected' ? 'connected' : 'pending',
+          createdAt: timestampToISO(d.createdAt),
+          updatedAt: timestampToISO(d.updatedAt),
+        };
+      });
+      onUpdate(list);
+    },
+    (error) => {
+      if (isTransientFirestoreOfflineError(error)) return;
+      handleFirestoreError(error, OperationType.LIST, 'social_connections');
+    }
+  );
+}
+
+export async function requestSocialConnectionInCloud(params: {
+  requesterId: string;
+  requesterName: string;
+  requesterAvatarUrl?: string;
+  requesterAvatarVisibility: AvatarVisibility;
+  recipientId: string;
+  recipientName: string;
+}): Promise<SocialConnection | null> {
+  if (
+    !auth.currentUser ||
+    !auth.currentUser.emailVerified ||
+    auth.currentUser.uid !== params.requesterId ||
+    params.recipientId === params.requesterId
+  ) {
+    return null;
+  }
+
+  const pair = [params.requesterId, params.recipientId].sort();
+  const connId = `conn_${pair[0].slice(0, 48)}_${pair[1].slice(0, 48)}`;
+  const ref = doc(db, 'social_connections', connId);
+  const cleanAvatar =
+    typeof params.requesterAvatarUrl === 'string' &&
+    params.requesterAvatarUrl.length > 0 &&
+    params.requesterAvatarUrl.length <= 350000
+      ? params.requesterAvatarUrl
+      : undefined;
+
+  try {
+    const existing = await getDoc(ref);
+    if (existing.exists()) {
+      const d = existing.data();
+      return {
+        id: String(d.id || connId),
+        requesterId: String(d.requesterId || params.requesterId),
+        requesterName: String(d.requesterName || params.requesterName),
+        requesterAvatarVisibility:
+          d.requesterAvatarVisibility === 'connections_only' ? 'connections_only' : 'world',
+        recipientId: String(d.recipientId || params.recipientId),
+        recipientName: String(d.recipientName || params.recipientName),
+        recipientAvatarVisibility:
+          d.recipientAvatarVisibility === 'connections_only' ? 'connections_only' : 'world',
+        status: d.status === 'connected' ? 'connected' : 'pending',
+        createdAt: timestampToISO(d.createdAt),
+        updatedAt: timestampToISO(d.updatedAt),
+      };
+    }
+
+    await setDoc(
+      ref,
+      stripUndefinedDeep({
+        id: connId,
+        requesterId: params.requesterId,
+        requesterName: sanitizeText(params.requesterName, BLUEPRINT_LIMITS.displayNameMax, 'Scholar'),
+        requesterAvatarUrl: cleanAvatar,
+        requesterAvatarVisibility:
+          params.requesterAvatarVisibility === 'connections_only' ? 'connections_only' : 'world',
+        recipientId: params.recipientId,
+        recipientName: sanitizeText(params.recipientName, BLUEPRINT_LIMITS.displayNameMax, 'Scholar'),
+        recipientAvatarVisibility: 'world',
+        participants: pair,
+        status: 'pending',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    );
+    const nowIso = new Date().toISOString();
+    return {
+      id: connId,
+      requesterId: params.requesterId,
+      requesterName: params.requesterName,
+      requesterAvatarUrl: cleanAvatar,
+      requesterAvatarVisibility: params.requesterAvatarVisibility,
+      recipientId: params.recipientId,
+      recipientName: params.recipientName,
+      recipientAvatarVisibility: 'world',
+      status: 'pending',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+  } catch (error) {
+    if (isTransientFirestoreOfflineError(error)) return null;
+    handleFirestoreError(error, OperationType.CREATE, `social_connections/${connId}`);
+    return null;
+  }
+}
+
+export async function acceptSocialConnectionInCloud(params: {
+  connectionId: string;
+  recipientAvatarUrl?: string;
+  recipientAvatarVisibility: AvatarVisibility;
+}): Promise<void> {
+  if (!auth.currentUser || !auth.currentUser.emailVerified) return;
+  const cleanAvatar =
+    typeof params.recipientAvatarUrl === 'string' &&
+    params.recipientAvatarUrl.length > 0 &&
+    params.recipientAvatarUrl.length <= 350000
+      ? params.recipientAvatarUrl
+      : undefined;
+
+  try {
+    await updateDoc(
+      doc(db, 'social_connections', params.connectionId),
+      stripUndefinedDeep({
+        status: 'connected',
+        recipientAvatarUrl: cleanAvatar,
+        recipientAvatarVisibility:
+          params.recipientAvatarVisibility === 'connections_only' ? 'connections_only' : 'world',
+        updatedAt: serverTimestamp(),
+      })
+    );
+  } catch (error) {
+    if (isTransientFirestoreOfflineError(error)) return;
+    handleFirestoreError(error, OperationType.UPDATE, `social_connections/${params.connectionId}`);
   }
 }

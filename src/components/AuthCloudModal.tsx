@@ -289,8 +289,8 @@ export const AuthCloudModal: React.FC<AuthCloudModalProps> = ({
                   )}
                 </div>
                 <p className="text-xs text-slate-500">
-                  Switch between Candidate, Primary Super Admin, Minimal Admin, and Maximum Sub-Admin
-                  feature scopes:
+                  Local Sandbox runs in Candidate mode. Sign in with an authorized account for admin
+                  governance tools.
                 </p>
                 <div className="flex flex-wrap items-center gap-2 pt-1">
                   <button
@@ -299,59 +299,9 @@ export const AuthCloudModal: React.FC<AuthCloudModalProps> = ({
                       onSelectSandboxRole('none');
                       onClose();
                     }}
-                    className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
-                      staffAccess.tier === 'none'
-                        ? 'border-sky-600 bg-sky-50 text-sky-900'
-                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                    }`}
+                    className="rounded-lg border border-sky-600 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-900 transition-colors whitespace-nowrap"
                   >
                     Candidate View
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onSelectSandboxRole('super_admin');
-                      onClose();
-                    }}
-                    className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
-                      staffAccess.tier === 'super_admin' && staffAccess.isDemoPreview
-                        ? 'border-sky-600 bg-sky-50 text-sky-900'
-                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                    }`}
-                  >
-                    Preview Super Admin
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onSelectSandboxRole('sub_admin_minimal');
-                      onClose();
-                    }}
-                    className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
-                      staffAccess.tier === 'sub_admin' &&
-                      !staffAccess.canGrantBonuses &&
-                      staffAccess.isDemoPreview
-                        ? 'border-sky-600 bg-sky-50 text-sky-900'
-                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                    }`}
-                  >
-                    Preview Minimal Admin
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onSelectSandboxRole('sub_admin_maximum');
-                      onClose();
-                    }}
-                    className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
-                      staffAccess.tier === 'sub_admin' &&
-                      staffAccess.canBanUsers &&
-                      staffAccess.isDemoPreview
-                        ? 'border-sky-600 bg-sky-50 text-sky-900'
-                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                    }`}
-                  >
-                    Preview Maximum Sub-Admin
                   </button>
                 </div>
               </div>

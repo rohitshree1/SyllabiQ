@@ -10,7 +10,11 @@ import {
   emailToInviteKey,
   evaluateFirestoreRuleOperation,
   filterCandidatePiiForStaff,
+  isDemoPlaceholderStudentName,
+  isSuperAdminCandidateRecord,
+  isSuperAdminEmail,
   isValidFirestoreId,
+  resolveAuthenticatedDisplayName,
   resolveSandboxStaffAccess,
   stripUndefinedDeep,
   type SimulatedDatabaseState,
@@ -1178,3 +1182,259 @@ test('Workspaces: permits optional aiStrategyBriefing while rejecting injected k
     'PERMISSION_DENIED'
   );
 });
+
+test('Social SyllabiQ Zero-Trust: World & 1-on-1 DM messages and connections enforce sender/participant isolation', () => {
+  const db = createBaseSimulatedDb();
+  const aliceAuth = { uid: 'cand_alice', email: 'alice@university.edu', email_verified: true };
+  const bobAuth = { uid: 'cand_bob', email: 'bob@university.edu', email_verified: true };
+  const malloryAuth = { uid: 'cand_mallory', email: 'mallory@university.edu', email_verified: true };
+
+  // Positive: verified Alice can post "hello" to World chat
+  assert.equal(
+    evaluateFirestoreRuleOperation({
+      collection: 'social_messages',
+      operation: 'create',
+      docId: 'soc_world_1',
+      auth: aliceAuth,
+      db,
+      incomingData: {
+        id: 'soc_world_1',
+        channelType: 'world',
+        channelId: 'world',
+        participants: ['cand_alice'],
+        senderId: 'cand_alice',
+        senderName: 'Alice Sharma',
+        senderAvatarVisibility: 'world',
+        text: 'hello',
+        createdAt: NOW,
+      },
+      requestTimeISO: NOW,
+    }),
+    'ALLOW'
+  );
+
+  // Payload 13: Mallory cannot spoof Alice's senderId
+  assert.equal(
+    evaluateFirestoreRuleOperation({
+      collection: 'social_messages',
+      operation: 'create',
+      docId: 'soc_spoof_1',
+      auth: malloryAuth,
+      db,
+      incomingData: {
+        id: 'soc_spoof_1',
+        channelType: 'world',
+        channelId: 'world',
+        participants: ['cand_alice'],
+        senderId: 'cand_alice',
+        senderName: 'Alice Sharma',
+        senderAvatarVisibility: 'world',
+        text: 'spoofed',
+        createdAt: NOW,
+      },
+      requestTimeISO: NOW,
+    }),
+    'PERMISSION_DENIED'
+  );
+
+  // Payload 14: Mallory cannot read 1-on-1 DM between Alice and Bob
+  db.social_messages = {
+    soc_dm_1: {
+      id: 'soc_dm_1',
+      channelType: 'dm',
+      channelId: 'dm::cand_alice::cand_bob',
+      participants: ['cand_alice', 'cand_bob'],
+      senderId: 'cand_alice',
+      senderName: 'Alice Sharma',
+      senderAvatarVisibility: 'world',
+      text: 'private study note',
+      createdAt: NOW,
+    },
+  };
+  assert.equal(
+    evaluateFirestoreRuleOperation({
+      collection: 'social_messages',
+      operation: 'get',
+      docId: 'soc_dm_1',
+      auth: malloryAuth,
+      db,
+    }),
+    'PERMISSION_DENIED'
+  );
+  assert.equal(
+    evaluateFirestoreRuleOperation({
+      collection: 'social_messages',
+      operation: 'get',
+      docId: 'soc_dm_1',
+      auth: bobAuth,
+      db,
+    }),
+    'ALLOW'
+  );
+
+  // Payload 15: Requester Alice cannot self-approve a pending connection; only recipient Bob can
+  db.social_connections = {
+    conn_alice_bob: {
+      id: 'conn_alice_bob',
+      requesterId: 'cand_alice',
+      requesterName: 'Alice Sharma',
+      requesterAvatarVisibility: 'world',
+      recipientId: 'cand_bob',
+      recipientName: 'Bob Verma',
+      recipientAvatarVisibility: 'world',
+      participants: ['cand_alice', 'cand_bob'],
+      status: 'pending',
+      createdAt: NOW,
+      updatedAt: NOW,
+    },
+  };
+  assert.equal(
+    evaluateFirestoreRuleOperation({
+      collection: 'social_connections',
+      operation: 'update',
+      docId: 'conn_alice_bob',
+      auth: aliceAuth,
+      db,
+      incomingData: {
+        ...db.social_connections.conn_alice_bob,
+        status: 'connected',
+        updatedAt: NOW,
+      },
+      requestTimeISO: NOW,
+    }),
+    'PERMISSION_DENIED'
+  );
+  assert.equal(
+    evaluateFirestoreRuleOperation({
+      collection: 'social_connections',
+      operation: 'update',
+      docId: 'conn_alice_bob',
+      auth: bobAuth,
+      db,
+      incomingData: {
+        ...db.social_connections.conn_alice_bob,
+        status: 'connected',
+        updatedAt: NOW,
+      },
+      requestTimeISO: NOW,
+    }),
+    'ALLOW'
+  );
+});
+
+test('Super Admin ban immunity, legacy self-healing unban, roster exclusion & real display name resolution', () => {
+  const db = createBaseSimulatedDb();
+  const superUid = 'super_rohit_uid';
+  db.users_private[superUid] = {
+    ownerUid: superUid,
+    email: BOOTSTRAPPED_SUPER_ADMIN_EMAIL,
+    authProvider: 'google.com',
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+  db.candidates[superUid] = {
+    ownerUid: superUid,
+    displayName: 'Aarav Mehta',
+    contactEmail: BOOTSTRAPPED_SUPER_ADMIN_EMAIL,
+    boardOrUniversity: 'CBSE Class 12',
+    examName: 'JEE',
+    examDate: '2026-11-20',
+    readinessPercent: 50,
+    overallRatingOutOf10: 7,
+    completedChapters: 2,
+    totalChapters: 10,
+    attemptsCount: 1,
+    focusMinutesLogged: 30,
+    bonusPoints: 0,
+    banned: true,
+    banReason: 'Accidental self-ban',
+    adsEnabled: false,
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+
+  // Sub-Admin with canBanUsers tries to ban Super Admin -> PERMISSION_DENIED
+  assert.equal(
+    evaluateFirestoreRuleOperation({
+      collection: 'candidates',
+      operation: 'update',
+      docId: superUid,
+      auth: { uid: 'uid_full_mod', email: 'full@admin.edu', email_verified: true },
+      db,
+      incomingData: {
+        ...db.candidates[superUid],
+        banned: true,
+        banReason: 'Attempted moderation',
+        updatedAt: NOW,
+      },
+      requestTimeISO: NOW,
+    }),
+    'PERMISSION_DENIED'
+  );
+
+  // Even Super Admin cannot re-ban rohitshree1973@gmail.com -> PERMISSION_DENIED
+  assert.equal(
+    evaluateFirestoreRuleOperation({
+      collection: 'candidates',
+      operation: 'update',
+      docId: superUid,
+      auth: { uid: superUid, email: BOOTSTRAPPED_SUPER_ADMIN_EMAIL, email_verified: true },
+      db,
+      incomingData: {
+        ...db.candidates[superUid],
+        banned: true,
+        banReason: 'Self-ban test',
+        updatedAt: NOW,
+      },
+      requestTimeISO: NOW,
+    }),
+    'PERMISSION_DENIED'
+  );
+
+  // Super Admin self-healing unban + replacing "Aarav Mehta" -> ALLOW
+  assert.equal(
+    evaluateFirestoreRuleOperation({
+      collection: 'candidates',
+      operation: 'update',
+      docId: superUid,
+      auth: { uid: superUid, email: BOOTSTRAPPED_SUPER_ADMIN_EMAIL, email_verified: true },
+      db,
+      incomingData: {
+        ...db.candidates[superUid],
+        displayName: 'Rohit Shree',
+        banned: false,
+        banReason: '',
+        updatedAt: NOW,
+      },
+      requestTimeISO: NOW,
+    }),
+    'ALLOW'
+  );
+
+  // Super Admin exclusion helper for candidate lists & admin digest
+  assert.equal(isSuperAdminEmail(BOOTSTRAPPED_SUPER_ADMIN_EMAIL), true);
+  assert.equal(
+    isSuperAdminCandidateRecord({ ownerUid: superUid, contactEmail: BOOTSTRAPPED_SUPER_ADMIN_EMAIL }),
+    true
+  );
+  assert.equal(isSuperAdminCandidateRecord({ ownerUid: superUid }, superUid), true);
+  assert.equal(isSuperAdminCandidateRecord({ ownerUid: 'cand_alice', email: 'alice@gmail.com' }, superUid), false);
+
+  // Real name resolver must reject Aarav Mehta / Aarav Sharma / Scholar and prefer Google/Super Admin name
+  assert.equal(isDemoPlaceholderStudentName('Aarav Mehta'), true);
+  assert.equal(isDemoPlaceholderStudentName('Aarav Sharma'), true);
+  assert.equal(isDemoPlaceholderStudentName('Rohit Shree'), false);
+  assert.equal(
+    resolveAuthenticatedDisplayName({ displayName: 'Aarav Mehta', email: BOOTSTRAPPED_SUPER_ADMIN_EMAIL }),
+    'Rohit Shree'
+  );
+  assert.equal(
+    resolveAuthenticatedDisplayName({ displayName: 'Rohit Shree', email: BOOTSTRAPPED_SUPER_ADMIN_EMAIL }),
+    'Rohit Shree'
+  );
+  assert.equal(
+    resolveAuthenticatedDisplayName({ displayName: null, email: 'ananya.verma@gmail.com' }),
+    'Ananya Verma'
+  );
+});
+

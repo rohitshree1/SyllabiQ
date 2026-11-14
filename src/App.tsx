@@ -89,6 +89,7 @@ import {
   syncCandidateWorkspaceToCloud,
   togglePinGlobalUpdateInCloud,
   updateStaffInviteStatusOrPermsInCloud,
+  upsertSocialProfileInCloud,
   upsertStaffInviteInCloud,
 } from './services/cloudService';
 import {
@@ -101,8 +102,13 @@ import {
   updateSocialProfileVisibilityApi,
 } from './utils/apiClient';
 import {
+  DEMO_PLACEHOLDER_EMAIL,
   emailToInviteKey,
   filterCandidatePiiForStaff,
+  isDemoPlaceholderStudentName,
+  isSuperAdminCandidateRecord,
+  isSuperAdminEmail,
+  resolveAuthenticatedDisplayName,
   resolveSandboxStaffAccess,
   type SandboxRolePreviewMode,
 } from './utils/firestoreValidators';
@@ -177,6 +183,43 @@ function normalizeHydratedAppState(rawState: AppState): AppState {
       lastActiveDate: lastActive,
     },
     achievements,
+  };
+}
+
+function sanitizeStateForAuthenticatedUser(
+  rawState: AppState,
+  acct: { displayName: string; email?: string; photoURL?: string }
+): AppState {
+  const realName = resolveAuthenticatedDisplayName({
+    displayName: acct.displayName,
+    email: acct.email,
+  });
+  const currentName = rawState.student?.name;
+  const replaceName = isDemoPlaceholderStudentName(currentName);
+  const resolvedName = replaceName ? realName : currentName;
+  const currentEmail = (rawState.student?.email || '').trim();
+  const replaceEmail =
+    !currentEmail || currentEmail.toLowerCase() === DEMO_PLACEHOLDER_EMAIL;
+  const resolvedEmail = replaceEmail ? acct.email || '' : currentEmail;
+
+  const updatedAchievements = Array.isArray(rawState.achievements)
+    ? rawState.achievements.map((ach) => ({
+        ...ach,
+        shareHeadline: ach.shareHeadline
+          ? ach.shareHeadline.replace(/\bAarav\s+(Mehta|Sharma)\b/gi, resolvedName)
+          : ach.shareHeadline,
+      }))
+    : [];
+
+  return {
+    ...rawState,
+    student: {
+      ...rawState.student,
+      name: resolvedName,
+      email: resolvedEmail,
+      avatarUrl: rawState.student?.avatarUrl || acct.photoURL || undefined,
+    },
+    achievements: updatedAchievements,
   };
 }
 
@@ -360,17 +403,20 @@ export default function App() {
         return;
       }
 
+      const mapped = mapFirebaseUserToAccount(verifiedUser);
+      setAccount(mapped);
+
       const prevUid = lastAuthenticatedUidRef.current;
       lastAuthenticatedUidRef.current = verifiedUser.uid;
       const switchedAccount = prevUid !== null && prevUid !== verifiedUser.uid;
-      const baseLocalState = switchedAccount ? createEmptyAppState() : appStateRef.current;
+      const baseLocalState = switchedAccount
+        ? createEmptyAppState()
+        : sanitizeStateForAuthenticatedUser(appStateRef.current, mapped);
       if (switchedAccount) {
         setAppState(baseLocalState);
       }
 
       setCloudHydratedUid(null);
-      const mapped = mapFirebaseUserToAccount(verifiedUser);
-      setAccount(mapped);
 
       try {
         const staff = await resolveStaffAccessForUser(verifiedUser);
@@ -384,9 +430,16 @@ export default function App() {
           );
           setCloudSummary(summary);
           if (workspaceState && workspaceState.onboarded) {
-            setAppState(normalizeHydratedAppState(workspaceState));
+            setAppState(
+              normalizeHydratedAppState(
+                sanitizeStateForAuthenticatedUser(workspaceState, mapped)
+              )
+            );
           } else if (staff.tier !== 'none' && !baseLocalState.onboarded) {
-            setAppState(normalizeHydratedAppState(createDemoSeedState()));
+            const staffSeed = sanitizeStateForAuthenticatedUser(createDemoSeedState(), mapped);
+            setAppState(normalizeHydratedAppState(staffSeed));
+          } else if (baseLocalState.onboarded && !switchedAccount) {
+            setAppState(normalizeHydratedAppState(baseLocalState));
           }
           if (staff.tier !== 'none') {
             setActiveTab('admin');
@@ -433,6 +486,15 @@ export default function App() {
     if (!authReady || !account || !account.emailVerified || cloudHydratedUid !== account.uid) return;
 
     const unsubSummary = subscribeToOwnCandidateSummary(account.uid, (summary) => {
+      if (isSuperAdminEmail(account.email) && summary.banned) {
+        setCloudSummary({ ...summary, banned: false, banReason: '' });
+        void setCandidateBanInCloud({
+          targetUid: account.uid,
+          banned: false,
+          banReason: '',
+        }).catch(() => {});
+        return;
+      }
       setCloudSummary(summary);
     });
     const unsubBonuses = subscribeToCandidateBonuses(account.uid, (bonuses) => {
@@ -640,8 +702,11 @@ export default function App() {
   };
 
   const handleLoadDemoWorkspace = () => {
-    const demo = normalizeHydratedAppState(createDemoSeedState());
-    setAppState(demo);
+    const rawDemo = createDemoSeedState();
+    const customizedDemo = account
+      ? sanitizeStateForAuthenticatedUser(rawDemo, account)
+      : rawDemo;
+    setAppState(normalizeHydratedAppState(customizedDemo));
     setActiveTab('dashboard');
   };
 
@@ -1010,14 +1075,18 @@ export default function App() {
       const resolvedOwnerKey = account ? account.uid : 'sandbox-candidate';
       const resolvedAvatarUrl =
         nextStudent.avatarUrl || account?.photoURL || defaultAvatarImg;
-      void updateSocialProfileVisibilityApi({
+      const profilePayload = {
         userId: resolvedOwnerKey,
         profileId: generateScholarProfileId(resolvedOwnerKey),
         displayName: nextStudent.name || account?.displayName || 'Scholar',
         avatarUrl: resolvedAvatarUrl,
         avatarVisibility: nextStudent.avatarVisibility ?? 'world',
         flexTier: snap.rarity.tier,
-      });
+      };
+      void updateSocialProfileVisibilityApi(profilePayload);
+      if (account?.emailVerified) {
+        void upsertSocialProfileInCloud(profilePayload);
+      }
     }
   };
 
@@ -1170,7 +1239,7 @@ export default function App() {
       credentialCode: generateFlexCardSerial(ownerKey, ach.code || ach.id),
       kind: 'flexcard' as const,
       ownerUid: ownerKey,
-      ownerName: appState.student.name || 'Aarav Sharma',
+      ownerName: appState.student.name || account?.displayName || 'Scholar',
       candidateEmail: appState.student.email || account?.email,
       boardOrUniversity:
         appState.student.boardOrUniversity || 'CBSE Class 12 · Engineering Entrance Prep',
@@ -1188,6 +1257,7 @@ export default function App() {
     appState.student.boardOrUniversity,
     appState.student.examName,
     account?.email,
+    account?.displayName,
     ownerKey,
     xpSnapshot.netXp,
     xpSnapshot.rarity.tier,
@@ -1199,12 +1269,12 @@ export default function App() {
       credentialCode: generateReportCardSerial(ownerKey, 'ALL'),
       kind: 'report_card',
       ownerUid: ownerKey,
-      ownerName: appState.student.name || 'Aarav Sharma',
+      ownerName: appState.student.name || account?.displayName || 'Scholar',
       candidateEmail: appState.student.email || account?.email,
       boardOrUniversity:
         appState.student.boardOrUniversity || 'CBSE Class 12 · Engineering Entrance Prep',
       examName: appState.student.examName || 'Final Examinations',
-      title: `${appState.student.name || 'Scholar'} — Official SyllabiQ Report Card`,
+      title: `${appState.student.name || account?.displayName || 'Scholar'} — Official SyllabiQ Report Card`,
       subtitleOrMetric: `${metrics.examReadinessPercent}% Exam Readiness · ${
         metrics.overallScoreOutOf10 !== null ? `${metrics.overallScoreOutOf10}/10` : 'Calibrating'
       }`,
@@ -1449,6 +1519,21 @@ export default function App() {
     banned: boolean,
     banReason: string
   ) => {
+    if (
+      banned &&
+      account &&
+      (targetUid === account.uid ||
+        cloudCandidates.some(
+          (c) =>
+            c.ownerUid === targetUid &&
+            isSuperAdminCandidateRecord(
+              c,
+              effectiveStaffAccess.tier === 'super_admin' ? account.uid : undefined
+            )
+        ))
+    ) {
+      throw new Error('The Primary Super Admin account cannot be suspended.');
+    }
     if (account) {
       await setCandidateBanInCloud({ targetUid, banned, banReason });
       await handleRefreshAdminRoster();
@@ -1622,24 +1707,19 @@ export default function App() {
     );
   };
 
-  const handleSelectSandboxRole = (mode: SandboxRolePreviewMode) => {
+  const handleSelectSandboxRole = (_mode: SandboxRolePreviewMode) => {
+    // Interactive Sandbox is restricted strictly to Candidate View (no admin/super-admin preview)
     setSandboxBannedPreview(false);
-    setSandboxRoleMode(mode);
+    setSandboxRoleMode('none');
     setHasEnteredLocalSandbox(true);
-    if (mode !== 'none') {
-      if (!appState.onboarded) {
-        setAppState(normalizeHydratedAppState(createDemoSeedState()));
-      }
-      setActiveTab('admin');
-    }
   };
 
   const handleEnterLocalPreview = (
-    roleMode: SandboxRolePreviewMode,
+    _roleMode: SandboxRolePreviewMode,
     loadDemoSyllabus: boolean,
     previewBanned = false
   ) => {
-    setSandboxRoleMode(roleMode);
+    setSandboxRoleMode('none');
     setSandboxBannedPreview(Boolean(previewBanned));
     setHasEnteredLocalSandbox(true);
     if (previewBanned) {
@@ -1649,7 +1729,7 @@ export default function App() {
       if (!appState.onboarded) {
         setAppState(normalizeHydratedAppState(createDemoSeedState()));
       }
-      setActiveTab(roleMode === 'none' ? 'dashboard' : 'admin');
+      setActiveTab('dashboard');
     } else {
       skipServerHydrationRef.current = true;
       setAppState(createEmptyAppState());
@@ -1662,8 +1742,8 @@ export default function App() {
     sandboxCandidates.find((c) => c.banned) ||
     null;
 
-  // Immediate lock screen if signed-in candidate account is suspended OR Banned Flex Sandbox is active
-  if (account && cloudSummary?.banned) {
+  // Immediate lock screen if signed-in non-Super-Admin candidate account is suspended OR Banned Flex Sandbox is active
+  if (account && cloudSummary?.banned && effectiveStaffAccess.tier !== 'super_admin') {
     return (
       <>
         <BannedAccountScreen
@@ -2086,6 +2166,7 @@ export default function App() {
             <SocialSyllabiQView
               state={appState}
               ownerKey={ownerKey}
+              isCloudAuthenticated={Boolean(account?.emailVerified)}
               avatarUrl={sidebarAvatarSrc}
               xpSnapshot={xpSnapshot}
               staleSubjects={staleSubjects}
@@ -2139,7 +2220,13 @@ export default function App() {
               }
               globalUpdates={effectiveGlobalUpdates}
               candidates={filterCandidatePiiForStaff(
-                account ? cloudCandidates : sandboxCandidates,
+                (account ? cloudCandidates : sandboxCandidates).filter(
+                  (c) =>
+                    !isSuperAdminCandidateRecord(
+                      c,
+                      effectiveStaffAccess.tier === 'super_admin' ? account?.uid : undefined
+                    )
+                ),
                 effectiveStaffAccess.canSendOutreach
               )}
               staffInvites={account ? cloudInvites : sandboxInvites}

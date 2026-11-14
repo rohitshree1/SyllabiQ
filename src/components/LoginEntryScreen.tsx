@@ -520,22 +520,6 @@ export const LoginEntryScreen: React.FC<LoginEntryScreenProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => onEnterLocalPreview('super_admin', true, false)}
-                    className="rounded-lg border border-sky-200 bg-sky-50/90 px-3 py-1.5 text-xs font-semibold text-sky-900 hover:bg-sky-100 transition-colors whitespace-nowrap shrink-0"
-                  >
-                    Super Admin
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => onEnterLocalPreview('sub_admin_maximum', true, false)}
-                    className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0"
-                  >
-                    Delegated Admin
-                  </button>
-
-                  <button
-                    type="button"
                     onClick={() => onEnterLocalPreview('none', true, true)}
                     className="rounded-lg border border-amber-200 bg-amber-50/90 px-3 py-1.5 text-xs font-medium text-amber-950 hover:bg-amber-100 transition-colors whitespace-nowrap shrink-0"
                   >

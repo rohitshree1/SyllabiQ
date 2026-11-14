@@ -43,6 +43,14 @@ service cloud.firestore {
       return isVerifiedUser() && request.auth.token.email == 'rohitshree1973@gmail.com';
     }
 
+    // Super Admin target immunity: rohitshree1973@gmail.com cannot be suspended/banned
+    function isProtectedSuperAdminTarget(userId) {
+      return (exists(/databases/$(database)/documents/users_private/$(userId))
+          && get(/databases/$(database)/documents/users_private/$(userId)).data.email == 'rohitshree1973@gmail.com')
+        || ('contactEmail' in existing() && existing().contactEmail == 'rohitshree1973@gmail.com')
+        || (isSuperAdmin() && userId == request.auth.uid);
+    }
+
     // Pillar 1 Master Gate: Sub-Admin seat is valid ONLY while BOTH /staff_members/{uid}
     // AND its parent /staff_invites/{inviteKey} remain active synchronously.
     function isSubAdmin() {
@@ -513,6 +521,127 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidSocialProfile(data) {
+      return data.keys().hasAll([
+          'userId',
+          'profileId',
+          'displayName',
+          'avatarVisibility',
+          'flexTier',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'userId',
+          'profileId',
+          'displayName',
+          'avatarUrl',
+          'avatarVisibility',
+          'flexTier',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.userId)
+        && data.profileId is string && data.profileId.size() >= 1 && data.profileId.size() <= 40
+        && data.profileId.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 350000))
+        && data.avatarVisibility is string && data.avatarVisibility.size() <= 20
+        && (data.avatarVisibility == 'world' || data.avatarVisibility == 'connections_only')
+        && data.flexTier is string && data.flexTier.size() >= 1 && data.flexTier.size() <= 40
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSocialMessage(data) {
+      return data.keys().hasAll([
+          'id',
+          'channelType',
+          'channelId',
+          'participants',
+          'senderId',
+          'senderName',
+          'senderAvatarVisibility',
+          'text',
+          'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'channelType',
+          'channelId',
+          'participants',
+          'senderId',
+          'senderName',
+          'senderAvatarUrl',
+          'senderAvatarVisibility',
+          'text',
+          'flexCard',
+          'createdAt'
+        ])
+        && isValidId(data.id)
+        && data.channelType is string && data.channelType.size() <= 10
+        && (data.channelType == 'world' || data.channelType == 'dm')
+        && data.channelId is string && data.channelId.size() >= 1 && data.channelId.size() <= 128
+        && data.participants is list && data.participants.size() >= 1 && data.participants.size() <= 2
+        && data.participants[0] is string && data.participants[0].size() >= 1 && data.participants[0].size() <= 128
+        && isValidId(data.senderId)
+        && data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80
+        && (!('senderAvatarUrl' in data) || (data.senderAvatarUrl is string && data.senderAvatarUrl.size() <= 350000))
+        && data.senderAvatarVisibility is string && data.senderAvatarVisibility.size() <= 20
+        && (data.senderAvatarVisibility == 'world' || data.senderAvatarVisibility == 'connections_only')
+        && data.text is string && data.text.size() <= 500
+        && (!('flexCard' in data) || (data.flexCard is map && data.flexCard.keys().size() <= 10))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSocialConnection(data) {
+      return data.keys().hasAll([
+          'id',
+          'requesterId',
+          'requesterName',
+          'requesterAvatarVisibility',
+          'recipientId',
+          'recipientName',
+          'recipientAvatarVisibility',
+          'participants',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'requesterId',
+          'requesterName',
+          'requesterAvatarUrl',
+          'requesterAvatarVisibility',
+          'recipientId',
+          'recipientName',
+          'recipientAvatarUrl',
+          'recipientAvatarVisibility',
+          'participants',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.requesterId)
+        && data.requesterName is string && data.requesterName.size() >= 1 && data.requesterName.size() <= 80
+        && (!('requesterAvatarUrl' in data) || (data.requesterAvatarUrl is string && data.requesterAvatarUrl.size() <= 350000))
+        && data.requesterAvatarVisibility is string && data.requesterAvatarVisibility.size() <= 20
+        && (data.requesterAvatarVisibility == 'world' || data.requesterAvatarVisibility == 'connections_only')
+        && isValidId(data.recipientId)
+        && data.recipientName is string && data.recipientName.size() >= 1 && data.recipientName.size() <= 80
+        && (!('recipientAvatarUrl' in data) || (data.recipientAvatarUrl is string && data.recipientAvatarUrl.size() <= 350000))
+        && data.recipientAvatarVisibility is string && data.recipientAvatarVisibility.size() <= 20
+        && (data.recipientAvatarVisibility == 'world' || data.recipientAvatarVisibility == 'connections_only')
+        && data.participants is list && data.participants.size() == 2
+        && data.participants[0] is string && data.participants[1] is string
+        && data.status is string && data.status.size() <= 20
+        && (data.status == 'pending' || data.status == 'connected')
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     // =========================================================================
     // 1. /users_private/{userId} — Isolated PII Vault (Pillar 6)
     // =========================================================================
@@ -645,9 +774,10 @@ service cloud.firestore {
               'createdAt',
               'updatedAt'
             ]))
-          // Action 2: Staff Moderation — Ban or Unban Candidate
+          // Action 2: Staff Moderation — Ban or Unban Candidate (Super Admin email is non-bannable)
           || ((isSuperAdmin() || hasStaffPerm('canBanUsers'))
-            && incoming().diff(existing()).affectedKeys().hasOnly(['banned', 'banReason', 'updatedAt']))
+            && incoming().diff(existing()).affectedKeys().hasOnly(['banned', 'banReason', 'updatedAt'])
+            && (incoming().banned == false || !isProtectedSuperAdminTarget(userId)))
           // Action 3: Staff Bonus Award — Bounded monotonic increment up to +5000 per grant
           || ((isSuperAdmin() || hasStaffPerm('canGrantBonuses'))
             && incoming().bonusPoints >= existing().bonusPoints
@@ -659,8 +789,8 @@ service cloud.firestore {
             && incoming().deductedPoints >= (('deductedPoints' in existing() && existing().deductedPoints is number) ? existing().deductedPoints : 0)
             && (incoming().deductedPoints - (('deductedPoints' in existing() && existing().deductedPoints is number) ? existing().deductedPoints : 0)) <= 5000
             && incoming().diff(existing()).affectedKeys().hasOnly(['deductedPoints', 'updatedAt']))
-          // Action 4: Super Admin Exclusive Escape Hatch
-          || isSuperAdmin()
+          // Action 4: Super Admin Exclusive Escape Hatch (still enforces Super Admin non-bannable invariant)
+          || (isSuperAdmin() && (incoming().banned == false || !isProtectedSuperAdminTarget(userId)))
         );
 
       allow delete: if isSignedIn() && isValidId(userId) && isSuperAdmin();
@@ -943,12 +1073,14 @@ service cloud.firestore {
         && digestId == 'overview'
         && isSuperAdmin()
         && incoming().digestId == existing().digestId
-        && incoming().createdAt == existing().createdAt
+        && (((!('createdAt' in existing()) || !(existing().createdAt is timestamp)) && incoming().createdAt == request.time)
+          || incoming().createdAt == existing().createdAt)
         && incoming().updatedByUid == request.auth.uid
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly([
           'entries',
           'updatedByUid',
+          'createdAt',
           'updatedAt'
         ]);
 
@@ -1046,6 +1178,125 @@ service cloud.firestore {
         );
 
       allow delete: if isSignedIn() && isValidId(verificationId) && isSuperAdmin();
+    }
+
+    // =========================================================================
+    // 11. /social_profiles/{userId} — Zero-PII Scholar Directory for Profile ID Search
+    // =========================================================================
+    match /social_profiles/{userId} {
+      allow get: if isSignedIn() && isVerifiedUser() && isValidId(userId);
+      allow list: if isSuperAdmin() || (isVerifiedUser() && existing().userId is string);
+
+      allow create: if isSignedIn()
+        && isVerifiedUser()
+        && isValidId(userId)
+        && isValidSocialProfile(incoming())
+        && isOwner(userId)
+        && incoming().userId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isSignedIn()
+        && isValidSocialProfile(incoming())
+        && isVerifiedUser()
+        && isValidId(userId)
+        && isOwner(userId)
+        && incoming().userId == existing().userId
+        && incoming().profileId == existing().profileId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName',
+          'avatarUrl',
+          'avatarVisibility',
+          'flexTier',
+          'updatedAt'
+        ]);
+
+      allow delete: if isSignedIn() && isValidId(userId) && isSuperAdmin();
+    }
+
+    // =========================================================================
+    // 12. /social_messages/{messageId} — World & 1-on-1 DM Messages (Zero PII)
+    // =========================================================================
+    match /social_messages/{messageId} {
+      allow get: if isSignedIn()
+        && isVerifiedUser()
+        && isValidId(messageId)
+        && (existing().channelType == 'world' || request.auth.uid in existing().participants || isSuperAdmin());
+
+      allow list: if isSuperAdmin()
+        || (isVerifiedUser() && (existing().channelType == 'world' || request.auth.uid in existing().participants));
+
+      allow create: if isSignedIn()
+        && isVerifiedUser()
+        && isValidId(messageId)
+        && isValidSocialMessage(incoming())
+        && incoming().id == messageId
+        && incoming().senderId == request.auth.uid
+        && incoming().createdAt == request.time
+        && (!exists(/databases/$(database)/documents/candidates/$(request.auth.uid))
+          || get(/databases/$(database)/documents/candidates/$(request.auth.uid)).data.banned == false)
+        && (
+          (incoming().channelType == 'world' && incoming().channelId == 'world')
+          || (incoming().channelType == 'dm'
+            && incoming().participants.size() == 2
+            && request.auth.uid in incoming().participants)
+        );
+
+      allow update: if false;
+      allow delete: if isSignedIn() && isValidId(messageId) && isSuperAdmin();
+    }
+
+    // =========================================================================
+    // 13. /social_connections/{connectionId} — 1-on-1 Scholar Connections
+    // =========================================================================
+    match /social_connections/{connectionId} {
+      allow get: if isSignedIn()
+        && isVerifiedUser()
+        && isValidId(connectionId)
+        && (request.auth.uid in existing().participants || isSuperAdmin());
+
+      allow list: if isSuperAdmin()
+        || (isVerifiedUser() && request.auth.uid in existing().participants);
+
+      allow create: if isSignedIn()
+        && isVerifiedUser()
+        && isValidId(connectionId)
+        && isValidSocialConnection(incoming())
+        && incoming().id == connectionId
+        && incoming().requesterId == request.auth.uid
+        && incoming().recipientId != request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().requesterId in incoming().participants
+        && incoming().recipientId in incoming().participants
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isSignedIn()
+        && isValidSocialConnection(incoming())
+        && isVerifiedUser()
+        && isValidId(connectionId)
+        && incoming().id == existing().id
+        && incoming().requesterId == existing().requesterId
+        && incoming().recipientId == existing().recipientId
+        && incoming().participants == existing().participants
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (existing().status == 'pending'
+            && incoming().status == 'connected'
+            && existing().recipientId == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status',
+              'recipientAvatarUrl',
+              'recipientAvatarVisibility',
+              'updatedAt'
+            ]))
+          || isSuperAdmin()
+        );
+
+      allow delete: if isSignedIn() && isValidId(connectionId) && isSuperAdmin();
     }
   }
 }

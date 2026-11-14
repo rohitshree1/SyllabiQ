@@ -29,7 +29,11 @@ import {
   decideSuspensionAppealApi,
   fetchSuspensionAppealsApi,
 } from '../utils/apiClient';
-import { BOOTSTRAPPED_SUPER_ADMIN_EMAIL } from '../utils/firestoreValidators';
+import {
+  BOOTSTRAPPED_SUPER_ADMIN_EMAIL,
+  isSuperAdminCandidateRecord,
+  isSuperAdminEmail,
+} from '../utils/firestoreValidators';
 import {
   buildOneClickOutreachLinks,
   resolveFlexRarityTier,
@@ -192,8 +196,29 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     void loadAppeals();
   }, [loadAppeals]);
 
+  const visibleCandidates = candidates.filter(
+    (c) =>
+      !isSuperAdminCandidateRecord(
+        c,
+        staffAccess.tier === 'super_admin' ? currentStaffUid : undefined
+      )
+  );
+  const visibleAppeals = appeals.filter((a) => !isSuperAdminEmail(a.candidateEmail));
+
   const inspectedCandidate =
-    candidates.find((c) => c.ownerUid === inspectedCandidateUid) || candidates[0] || null;
+    visibleCandidates.find((c) => c.ownerUid === inspectedCandidateUid) ||
+    visibleCandidates[0] ||
+    null;
+
+  useEffect(() => {
+    if (visibleCandidates.length === 0) {
+      if (inspectedCandidateUid !== null) setInspectedCandidateUid(null);
+      return;
+    }
+    if (!inspectedCandidateUid || !visibleCandidates.some((c) => c.ownerUid === inspectedCandidateUid)) {
+      setInspectedCandidateUid(visibleCandidates[0].ownerUid);
+    }
+  }, [visibleCandidates, inspectedCandidateUid]);
 
   useEffect(() => {
     if (!inspectedCandidate) {
@@ -307,6 +332,16 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   };
 
   const handleConfirmBanChange = async (target: CandidateSummaryDoc, nextBanned: boolean) => {
+    if (
+      nextBanned &&
+      isSuperAdminCandidateRecord(
+        target,
+        staffAccess.tier === 'super_admin' ? currentStaffUid : undefined
+      )
+    ) {
+      setErrorFeedback('Primary Super Admin accounts cannot be suspended.');
+      return;
+    }
     if (!nextBanned && staffAccess.tier !== 'super_admin') {
       setErrorFeedback(
         'Suspended accounts can only be unbanned if the Super Admin agrees (via Super Admin review).'
@@ -440,7 +475,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     }
   };
 
-  const filteredCandidates = candidates.filter((c) => {
+  const filteredCandidates = visibleCandidates.filter((c) => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return true;
     const candEmail = (c.contactEmail || c.email || '').toLowerCase();
@@ -455,8 +490,8 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     );
   });
 
-  const activeBansCount = candidates.filter((c) => c.banned).length;
-  const decayingCandidatesCount = candidates.filter(
+  const activeBansCount = visibleCandidates.filter((c) => c.banned).length;
+  const decayingCandidatesCount = visibleCandidates.filter(
     (c) => (c.inactiveDays ?? 0) >= 3 || c.activeLearnerActive === false
   ).length;
   const activeStaffCount = staffInvites.filter((i) => i.status === 'active').length;
@@ -529,7 +564,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
           <div className="flex flex-wrap items-center gap-6 font-mono tabular-nums text-xs shrink-0">
             <div>
               <p className="text-slate-500">Candidates</p>
-              <p className="text-lg font-bold text-slate-900">{candidates.length}</p>
+              <p className="text-lg font-bold text-slate-900">{visibleCandidates.length}</p>
             </div>
             <div>
               <p className="text-slate-500">Needs Check-In</p>
@@ -607,7 +642,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
               <Scale className="h-3.5 w-3.5 text-sky-600" />
               <span>
                 04. Suspension Appeals (
-                {appeals.filter((a) => a.status === 'pending_super_admin').length})
+                {visibleAppeals.filter((a) => a.status === 'pending_super_admin').length})
               </span>
             </button>
           </div>
@@ -1892,14 +1927,14 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             </div>
           )}
 
-          {appeals.length === 0 ? (
+          {visibleAppeals.length === 0 ? (
             <div className="py-10 text-center text-xs text-slate-500">
               No suspension appeals submitted yet. When a banned candidate completes the automated AI
               appeal interview, the structured summary appears here for Super Admin review.
             </div>
           ) : (
             <div className="divide-y divide-slate-200">
-              {appeals.map((appeal) => {
+              {visibleAppeals.map((appeal) => {
                 const isPending = appeal.status === 'pending_super_admin';
                 const isDeciding = decidingAppealId === appeal.id;
                 return (
