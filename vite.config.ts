@@ -1,3 +1,4 @@
+import fs from 'fs';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
@@ -6,10 +7,22 @@ import {defineConfig} from 'vite';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+function ensureNojekyllPlugin() {
+  return {
+    name: 'ensure-nojekyll',
+    writeBundle() {
+      const outDir = path.resolve(__dirname, 'dist');
+      if (fs.existsSync(outDir)) {
+        fs.writeFileSync(path.join(outDir, '.nojekyll'), '');
+      }
+    },
+  };
+}
+
 export default defineConfig(({command}) => {
   return {
     base: command === 'build' ? process.env.VITE_BASE_PATH || './' : '/',
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), ensureNojekyllPlugin()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
