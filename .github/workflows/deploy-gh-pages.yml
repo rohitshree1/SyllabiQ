@@ -2,7 +2,7 @@ name: Deploy SyllabiQ to GitHub Pages
 
 on:
   push:
-    branches: ['main']
+    branches: ['main', 'master']
   workflow_dispatch:
 
 permissions:
@@ -26,11 +26,17 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
       - name: Install dependencies
-        run: npm install
+        run: bun install --frozen-lockfile || npm install --legacy-peer-deps
 
       - name: Build static bundle
-        run: npm run build
+        run: bun run build
+
+      - name: Verify built output
+        run: test -f dist/index.html && test -f dist/.nojekyll
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

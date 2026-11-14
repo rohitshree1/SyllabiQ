@@ -16,6 +16,39 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      (function () {
+        var root = document.getElementById('root');
+        if (!root) return;
+        var lastError = '';
+        function showFallback() {
+          if (window.__SYLLABIQ_MOUNTED__ || root.childElementCount > 0) return;
+          var hasRawTsx = !!document.querySelector('script[src*="/src/main.tsx"]');
+          var msg = hasRawTsx
+            ? 'GitHub Pages is serving raw source files (/src/main.tsx) instead of the built bundle. In your GitHub repo, open Settings -> Pages -> Source and switch to "GitHub Actions", then trigger "Deploy SyllabiQ to GitHub Pages".'
+            : lastError
+            ? 'Application bundle failed to start: ' + lastError
+            : 'The application bundle could not finish loading on this host. Try hard-refreshing or verifying the deployed ./assets/ files.';
+          root.innerHTML =
+            '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:#f8fafc;font-family:system-ui,-apple-system,sans-serif;color:#0f172a;">' +
+            '<div style="max-width:480px;width:100%;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;padding:24px;box-sizing:border-box;">' +
+            '<h1 style="margin:0 0 8px;font-size:18px;font-weight:700;">SyllabiQ Deployment Setup Required</h1>' +
+            '<p style="margin:0 0 16px;font-size:13px;line-height:1.55;color:#475569;">' +
+            msg.replace(/[<>&"]/g, function (c) {
+              return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c];
+            }) +
+            '</p>' +
+            '<button type="button" onclick="window.location.reload()" style="background:#0f172a;color:#fff;border:none;border-radius:8px;padding:9px 14px;font-size:12px;font-weight:600;cursor:pointer;">Reload Page</button>' +
+            '</div></div>';
+        }
+        window.addEventListener('error', function (ev) {
+          if (!window.__SYLLABIQ_MOUNTED__ && !lastError && ev && ev.message) {
+            lastError = String(ev.message);
+          }
+        });
+        window.setTimeout(showFallback, 4500);
+      })();
+    </script>
   </body>
 </html>
 

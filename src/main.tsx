@@ -49,6 +49,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryS
 
 const rootEl = document.getElementById('root');
 if (rootEl) {
+  (window as Window & { __SYLLABIQ_MOUNTED__?: boolean }).__SYLLABIQ_MOUNTED__ = true;
   createRoot(rootEl).render(
     <AppErrorBoundary>
       <App />
