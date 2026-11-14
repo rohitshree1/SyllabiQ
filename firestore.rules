@@ -1,0 +1,1051 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 0: Global Default-Deny Catch-All
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // Core Zero-Trust Primitives
+    // =========================================================================
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidSerialId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 32 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Bootstrapped Super Admin (verified token email check — 0 DB reads)
+    function isSuperAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'rohitshree1973@gmail.com';
+    }
+
+    // Pillar 1 Master Gate: Sub-Admin seat is valid ONLY while BOTH /staff_members/{uid}
+    // AND its parent /staff_invites/{inviteKey} remain active synchronously.
+    function isSubAdmin() {
+      return isVerifiedUser()
+        && exists(/databases/$(database)/documents/staff_members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/staff_members/$(request.auth.uid)).data.active == true
+        && exists(/databases/$(database)/documents/staff_invites/$(get(/databases/$(database)/documents/staff_members/$(request.auth.uid)).data.inviteKey))
+        && get(/databases/$(database)/documents/staff_invites/$(get(/databases/$(database)/documents/staff_members/$(request.auth.uid)).data.inviteKey)).data.status == 'active';
+    }
+
+    function hasStaffPerm(permField) {
+      return isSubAdmin()
+        && (
+          (permField == 'canPostUpdates'
+            && get(/databases/$(database)/documents/staff_members/$(request.auth.uid)).data.canPostUpdates == true
+            && get(/databases/$(database)/documents/staff_invites/$(get(/databases/$(database)/documents/staff_members/$(request.auth.uid)).data.inviteKey)).data.canPostUpdates == true)
+          || (permField == 'canGrantBonuses'
+            && get(/databases/$(database)/documents/staff_members/$(request.auth.uid)).data.canGrantBonuses == true
+            && get(/databases/$(database)/documents/staff_invites/$(get(/databases/$(database)/documents/staff_members/$(request.auth.uid)).data.inviteKey)).data.canGrantBonuses == true)
+          || (permField == 'canBanUsers'
+            && get(/databases/$(database)/documents/staff_members/$(request.auth.uid)).data.canBanUsers == true
+            && get(/databases/$(database)/documents/staff_invites/$(get(/databases/$(database)/documents/staff_members/$(request.auth.uid)).data.inviteKey)).data.canBanUsers == true)
+        );
+    }
+
+    function isCandidateNotBanned(userId) {
+      return exists(/databases/$(database)/documents/candidates/$(userId))
+        && (!('banned' in get(/databases/$(database)/documents/candidates/$(userId)).data)
+          || get(/databases/$(database)/documents/candidates/$(userId)).data.banned == false);
+    }
+
+    // =========================================================================
+    // Entity Validation Blueprints (Anti-Update-Gap: No existing()/diff() inside)
+    // =========================================================================
+
+    function isValidUserPrivateInfo(data) {
+      return data.keys().hasAll(['ownerUid', 'email', 'authProvider', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'email', 'authProvider', 'createdAt', 'updatedAt'])
+        && isValidId(data.ownerUid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.authProvider is string && data.authProvider.size() <= 32
+        && (data.authProvider == 'google.com' || data.authProvider == 'microsoft.com')
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCandidateSummary(data) {
+      return data.keys().hasAll([
+          'ownerUid',
+          'displayName',
+          'boardOrUniversity',
+          'examName',
+          'examDate',
+          'readinessPercent',
+          'overallRatingOutOf10',
+          'completedChapters',
+          'totalChapters',
+          'attemptsCount',
+          'focusMinutesLogged',
+          'bonusPoints',
+          'banned',
+          'banReason',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid',
+          'displayName',
+          'avatarUrl',
+          'contactEmail',
+          'phoneNumber',
+          'notifyGmailOptIn',
+          'notifyWhatsappOptIn',
+          'institutionType',
+          'boardOrUniversity',
+          'examName',
+          'examDate',
+          'dailyStudyHours',
+          'readinessPercent',
+          'overallRatingOutOf10',
+          'completedChapters',
+          'totalChapters',
+          'attemptsCount',
+          'focusMinutesLogged',
+          'bonusPoints',
+          'deductedPoints',
+          'xpPoints',
+          'flexTier',
+          'lastActiveDate',
+          'inactiveDays',
+          'activeLearnerActive',
+          'unlockedBadges',
+          'weakTopics',
+          'banned',
+          'banReason',
+          'adsEnabled',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 32000))
+        && (!('contactEmail' in data) || (data.contactEmail is string && data.contactEmail.size() <= 160))
+        && (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 32))
+        && (!('notifyGmailOptIn' in data) || data.notifyGmailOptIn is bool)
+        && (!('notifyWhatsappOptIn' in data) || data.notifyWhatsappOptIn is bool)
+        && (!('institutionType' in data) || (data.institutionType is string && data.institutionType.size() <= 20 && (data.institutionType == 'school' || data.institutionType == 'university')))
+        && data.boardOrUniversity is string && data.boardOrUniversity.size() <= 120
+        && data.examName is string && data.examName.size() <= 120
+        && data.examDate is string && data.examDate.size() <= 20
+        && (!('dailyStudyHours' in data) || (data.dailyStudyHours is number && data.dailyStudyHours >= 0 && data.dailyStudyHours <= 24))
+        && data.readinessPercent is number && data.readinessPercent >= 0 && data.readinessPercent <= 100
+        && data.overallRatingOutOf10 is number && data.overallRatingOutOf10 >= 0 && data.overallRatingOutOf10 <= 10
+        && data.completedChapters is number && data.completedChapters >= 0 && data.completedChapters <= 500
+        && data.totalChapters is number && data.totalChapters >= 0 && data.totalChapters <= 500
+        && data.attemptsCount is number && data.attemptsCount >= 0 && data.attemptsCount <= 5000
+        && data.focusMinutesLogged is number && data.focusMinutesLogged >= 0 && data.focusMinutesLogged <= 500000
+        && data.bonusPoints is number && data.bonusPoints >= 0 && data.bonusPoints <= 500000
+        && (!('deductedPoints' in data) || (data.deductedPoints is number && data.deductedPoints >= 0 && data.deductedPoints <= 500000))
+        && (!('xpPoints' in data) || (data.xpPoints is number && data.xpPoints >= 0 && data.xpPoints <= 500000))
+        && (!('flexTier' in data) || (data.flexTier is string && data.flexTier.size() <= 40))
+        && (!('lastActiveDate' in data) || (data.lastActiveDate is string && data.lastActiveDate.size() <= 20))
+        && (!('inactiveDays' in data) || (data.inactiveDays is number && data.inactiveDays >= 0 && data.inactiveDays <= 3650))
+        && (!('activeLearnerActive' in data) || data.activeLearnerActive is bool)
+        && (!('unlockedBadges' in data) || (data.unlockedBadges is list && data.unlockedBadges.size() <= 15 && (data.unlockedBadges.size() == 0 || (data.unlockedBadges[0] is string && data.unlockedBadges[0].size() <= 80))))
+        && (!('weakTopics' in data) || (data.weakTopics is list && data.weakTopics.size() <= 8 && (data.weakTopics.size() == 0 || (data.weakTopics[0] is string && data.weakTopics[0].size() <= 120))))
+        && data.banned is bool
+        && data.banReason is string && data.banReason.size() <= 240
+        && (!('adsEnabled' in data) || data.adsEnabled is bool)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCandidateWorkspace(data) {
+      return data.keys().hasAll([
+          'ownerUid',
+          'onboarded',
+          'student',
+          'subjects',
+          'topics',
+          'schedule',
+          'attempts',
+          'achievements',
+          'lastReoptimizationNote',
+          'focusSessionsCompleted',
+          'focusMinutesTotal',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid',
+          'onboarded',
+          'student',
+          'subjects',
+          'topics',
+          'schedule',
+          'attempts',
+          'achievements',
+          'lastReoptimizationNote',
+          'focusSessionsCompleted',
+          'focusMinutesTotal',
+          'aiStrategyBriefing',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.onboarded is bool
+        && data.student is map && data.student.keys().size() <= 30
+        && data.subjects is list && data.subjects.size() <= 25
+        && (data.subjects.size() == 0 || data.subjects[0] is map)
+        && data.topics is list && data.topics.size() <= 150
+        && (data.topics.size() == 0 || data.topics[0] is map)
+        && data.schedule is list && data.schedule.size() <= 120
+        && (data.schedule.size() == 0 || data.schedule[0] is map)
+        && data.attempts is list && data.attempts.size() <= 50
+        && (data.attempts.size() == 0 || data.attempts[0] is map)
+        && data.achievements is list && data.achievements.size() <= 30
+        && (data.achievements.size() == 0 || data.achievements[0] is map)
+        && data.lastReoptimizationNote is string && data.lastReoptimizationNote.size() <= 500
+        && data.focusSessionsCompleted is number && data.focusSessionsCompleted >= 0 && data.focusSessionsCompleted <= 100000
+        && data.focusMinutesTotal is number && data.focusMinutesTotal >= 0 && data.focusMinutesTotal <= 500000
+        && (!('aiStrategyBriefing' in data) || (data.aiStrategyBriefing is map && data.aiStrategyBriefing.keys().size() <= 10))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidGlobalUpdate(data) {
+      return data.keys().hasAll([
+          'authorUid',
+          'authorName',
+          'authorRoleLabel',
+          'title',
+          'body',
+          'category',
+          'visibility',
+          'pinned',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'authorUid',
+          'authorName',
+          'authorRoleLabel',
+          'title',
+          'body',
+          'category',
+          'visibility',
+          'pinned',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.authorUid)
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80
+        && data.authorRoleLabel is string && data.authorRoleLabel.size() >= 1 && data.authorRoleLabel.size() <= 40
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+        && data.body is string && data.body.size() >= 1 && data.body.size() <= 800
+        && data.category is string && data.category.size() <= 32
+        && (
+          data.category == 'exam_alert' ||
+          data.category == 'feature_update' ||
+          data.category == 'study_tip' ||
+          data.category == 'bonus_event'
+        )
+        && data.visibility is string && data.visibility.size() <= 16 && data.visibility == 'public'
+        && data.pinned is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidIndividualBonus(data) {
+      return data.keys().hasAll([
+          'targetUserId',
+          'targetName',
+          'grantedByUid',
+          'grantedByName',
+          'bonusTitle',
+          'bonusType',
+          'pointsAwarded',
+          'message',
+          'acknowledged',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'targetUserId',
+          'targetName',
+          'grantedByUid',
+          'grantedByName',
+          'bonusTitle',
+          'bonusType',
+          'pointsAwarded',
+          'message',
+          'acknowledged',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.targetUserId)
+        && data.targetName is string && data.targetName.size() >= 1 && data.targetName.size() <= 80
+        && isValidId(data.grantedByUid)
+        && data.grantedByName is string && data.grantedByName.size() >= 1 && data.grantedByName.size() <= 80
+        && data.bonusTitle is string && data.bonusTitle.size() >= 1 && data.bonusTitle.size() <= 100
+        && data.bonusType is string && data.bonusType.size() <= 32
+        && (
+          data.bonusType == 'xp_boost' ||
+          data.bonusType == 'xp_deduction' ||
+          data.bonusType == 'streak_shield' ||
+          data.bonusType == 'custom_badge' ||
+          data.bonusType == 'mentor_note'
+        )
+        && data.pointsAwarded is number && data.pointsAwarded >= 0 && data.pointsAwarded <= 5000
+        && data.message is string && data.message.size() >= 1 && data.message.size() <= 500
+        && data.acknowledged is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStaffInvite(data) {
+      return data.keys().hasAll([
+          'inviteKey',
+          'targetEmail',
+          'adminPhone',
+          'displayName',
+          'canPostUpdates',
+          'canGrantBonuses',
+          'canBanUsers',
+          'status',
+          'createdByUid',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'inviteKey',
+          'targetEmail',
+          'adminPhone',
+          'displayName',
+          'canPostUpdates',
+          'canGrantBonuses',
+          'canBanUsers',
+          'status',
+          'createdByUid',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.inviteKey)
+        && data.targetEmail is string && data.targetEmail.size() >= 3 && data.targetEmail.size() <= 160
+        && data.targetEmail.matches('^[^@\\s]+@gmail\\.com$')
+        && data.adminPhone is string && data.adminPhone.size() >= 7 && data.adminPhone.size() <= 32
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.canPostUpdates is bool
+        && data.canGrantBonuses is bool
+        && data.canBanUsers is bool
+        && data.status is string && data.status.size() <= 20
+        && (data.status == 'active' || data.status == 'revoked')
+        && isValidId(data.createdByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStaffMember(data) {
+      return data.keys().hasAll([
+          'userId',
+          'inviteKey',
+          'displayName',
+          'role',
+          'canPostUpdates',
+          'canGrantBonuses',
+          'canBanUsers',
+          'active',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'userId',
+          'inviteKey',
+          'displayName',
+          'adminEmail',
+          'adminPhone',
+          'role',
+          'canPostUpdates',
+          'canGrantBonuses',
+          'canBanUsers',
+          'active',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.userId)
+        && isValidId(data.inviteKey)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && (!('adminEmail' in data) || (data.adminEmail is string && data.adminEmail.size() >= 3 && data.adminEmail.size() <= 160))
+        && (!('adminPhone' in data) || (data.adminPhone is string && data.adminPhone.size() <= 32))
+        && data.role is string && data.role.size() <= 24 && data.role == 'sub_admin'
+        && data.canPostUpdates is bool
+        && data.canGrantBonuses is bool
+        && data.canBanUsers is bool
+        && data.active is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminDigest(data) {
+      return data.keys().hasAll(['digestId', 'entries', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['digestId', 'entries', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && isValidId(data.digestId)
+        && data.entries is list && data.entries.size() <= 50
+        && (data.entries.size() == 0 || data.entries[0] is map)
+        && isValidId(data.updatedByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidIssuedCredential(data) {
+      return data.keys().hasAll([
+          'credentialCode',
+          'credentialType',
+          'ownerUid',
+          'candidateName',
+          'boardOrUniversity',
+          'examName',
+          'title',
+          'metricSummary',
+          'xpPoints',
+          'flexTier',
+          'issuedDate',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'credentialCode',
+          'credentialType',
+          'ownerUid',
+          'candidateName',
+          'boardOrUniversity',
+          'examName',
+          'title',
+          'metricSummary',
+          'xpPoints',
+          'flexTier',
+          'issuedDate',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidSerialId(data.credentialCode)
+        && data.credentialType is string && data.credentialType.size() <= 20
+        && (data.credentialType == 'flexcard' || data.credentialType == 'report_card')
+        && isValidId(data.ownerUid)
+        && data.candidateName is string && data.candidateName.size() >= 1 && data.candidateName.size() <= 80
+        && data.boardOrUniversity is string && data.boardOrUniversity.size() <= 120
+        && data.examName is string && data.examName.size() <= 120
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+        && data.metricSummary is string && data.metricSummary.size() >= 1 && data.metricSummary.size() <= 200
+        && data.xpPoints is number && data.xpPoints >= 0 && data.xpPoints <= 500000
+        && data.flexTier is string && data.flexTier.size() >= 1 && data.flexTier.size() <= 40
+        && data.issuedDate is string && data.issuedDate.size() >= 1 && data.issuedDate.size() <= 20
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCredentialVerification(data) {
+      return data.keys().hasAll([
+          'verificationId',
+          'credentialCode',
+          'credentialType',
+          'targetUserId',
+          'credentialTitle',
+          'verifierUid',
+          'verifierName',
+          'verifierGmail',
+          'verifierPost',
+          'verifiedAtDate',
+          'acknowledged',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'verificationId',
+          'credentialCode',
+          'credentialType',
+          'targetUserId',
+          'credentialTitle',
+          'verifierUid',
+          'verifierName',
+          'verifierGmail',
+          'verifierPost',
+          'verifiedAtDate',
+          'acknowledged',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.verificationId)
+        && isValidSerialId(data.credentialCode)
+        && data.credentialType is string && data.credentialType.size() <= 20
+        && (data.credentialType == 'flexcard' || data.credentialType == 'report_card')
+        && isValidId(data.targetUserId)
+        && data.credentialTitle is string && data.credentialTitle.size() >= 1 && data.credentialTitle.size() <= 120
+        && isValidId(data.verifierUid)
+        && data.verifierName is string && data.verifierName.size() >= 2 && data.verifierName.size() <= 80
+        && data.verifierGmail is string && data.verifierGmail.size() >= 3 && data.verifierGmail.size() <= 160
+        && data.verifierGmail.matches('^[^@\\s]+@gmail\\.com$')
+        && data.verifierPost is string && data.verifierPost.size() <= 32
+        && (
+          data.verifierPost == 'teacher' ||
+          data.verifierPost == 'company_executive' ||
+          data.verifierPost == 'student'
+        )
+        && data.verifiedAtDate is string && data.verifiedAtDate.size() >= 1 && data.verifiedAtDate.size() <= 20
+        && data.acknowledged is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // =========================================================================
+    // 1. /users_private/{userId} — Isolated PII Vault (Pillar 6)
+    // =========================================================================
+    match /users_private/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isSuperAdmin() || isSubAdmin());
+      allow list: if isSuperAdmin();
+
+      allow create: if isSignedIn()
+        && isOwner(userId)
+        && isValidId(userId)
+        && isValidUserPrivateInfo(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().email == request.auth.token.email
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isSignedIn()
+        && isValidUserPrivateInfo(incoming())
+        && isVerifiedUser()
+        && isValidId(userId)
+        && ((!('ownerUid' in existing()) || !(existing().ownerUid is string) || existing().ownerUid.size() == 0)
+          || incoming().ownerUid == existing().ownerUid)
+        && (((!('createdAt' in existing()) || !(existing().createdAt is timestamp)) && incoming().createdAt == request.time)
+          || incoming().createdAt == existing().createdAt)
+        && incoming().updatedAt == request.time
+        && (
+          (isOwner(userId)
+            && incoming().ownerUid == request.auth.uid
+            && incoming().email == request.auth.token.email
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'ownerUid',
+              'email',
+              'authProvider',
+              'createdAt',
+              'updatedAt'
+            ]))
+          || isSuperAdmin()
+        );
+
+      allow delete: if isSignedIn() && isValidId(userId) && isSuperAdmin();
+    }
+
+    // =========================================================================
+    // 2. /candidates/{userId} — Academic Telemetry, XP/Rarity, Outreach & Standing
+    // =========================================================================
+    match /candidates/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isSuperAdmin() || isSubAdmin());
+      // Pillar 8: Zero get()/exists() inside allow list
+      allow list: if isSuperAdmin() || (isVerifiedUser() && existing().ownerUid == request.auth.uid);
+
+      allow create: if isSignedIn()
+        && isOwner(userId)
+        && isValidId(userId)
+        && isValidCandidateSummary(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().bonusPoints == 0
+        && (!('deductedPoints' in incoming()) || incoming().deductedPoints == 0)
+        && incoming().banned == false
+        && incoming().banReason == ''
+        && (!('adsEnabled' in incoming()) || incoming().adsEnabled is bool)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isSignedIn()
+        && isValidCandidateSummary(incoming())
+        && isVerifiedUser()
+        && isValidId(userId)
+        && ((!('ownerUid' in existing()) || !(existing().ownerUid is string) || existing().ownerUid.size() == 0)
+          || incoming().ownerUid == existing().ownerUid)
+        && (((!('createdAt' in existing()) || !(existing().createdAt is timestamp)) && incoming().createdAt == request.time)
+          || incoming().createdAt == existing().createdAt)
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Candidate syncs study telemetry, XP, and outreach preferences (blocked when banned; cannot alter bonusPoints, deductedPoints, banned, banReason, or adsEnabled)
+          (isOwner(userId)
+            && incoming().ownerUid == request.auth.uid
+            && (!('banned' in existing()) || existing().banned == false)
+            && incoming().banned == false
+            && incoming().bonusPoints == (('bonusPoints' in existing() && existing().bonusPoints is number) ? existing().bonusPoints : 0)
+            && (
+              ((!('deductedPoints' in existing()) || !(existing().deductedPoints is number))
+                && (!('deductedPoints' in incoming()) || incoming().deductedPoints == 0))
+              || ('deductedPoints' in existing() && existing().deductedPoints is number
+                && 'deductedPoints' in incoming() && incoming().deductedPoints == existing().deductedPoints)
+            )
+            && incoming().banReason == (('banReason' in existing() && existing().banReason is string) ? existing().banReason : '')
+            && (
+              ((!('adsEnabled' in existing()) || !(existing().adsEnabled is bool))
+                && (!('adsEnabled' in incoming()) || incoming().adsEnabled == false))
+              || ('adsEnabled' in existing() && existing().adsEnabled is bool
+                && 'adsEnabled' in incoming() && incoming().adsEnabled == existing().adsEnabled)
+            )
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'ownerUid',
+              'displayName',
+              'avatarUrl',
+              'contactEmail',
+              'phoneNumber',
+              'notifyGmailOptIn',
+              'notifyWhatsappOptIn',
+              'institutionType',
+              'boardOrUniversity',
+              'examName',
+              'examDate',
+              'dailyStudyHours',
+              'readinessPercent',
+              'overallRatingOutOf10',
+              'completedChapters',
+              'totalChapters',
+              'attemptsCount',
+              'focusMinutesLogged',
+              'bonusPoints',
+              'deductedPoints',
+              'xpPoints',
+              'flexTier',
+              'lastActiveDate',
+              'inactiveDays',
+              'activeLearnerActive',
+              'unlockedBadges',
+              'weakTopics',
+              'banned',
+              'banReason',
+              'adsEnabled',
+              'email',
+              'authProvider',
+              'photoURL',
+              'role',
+              'adsRemoved',
+              'streakDays',
+              'createdAt',
+              'updatedAt'
+            ]))
+          // Action 2: Staff Moderation — Ban or Unban Candidate
+          || ((isSuperAdmin() || hasStaffPerm('canBanUsers'))
+            && incoming().diff(existing()).affectedKeys().hasOnly(['banned', 'banReason', 'updatedAt']))
+          // Action 3: Staff Bonus Award — Bounded monotonic increment up to +5000 per grant
+          || ((isSuperAdmin() || hasStaffPerm('canGrantBonuses'))
+            && incoming().bonusPoints >= existing().bonusPoints
+            && (incoming().bonusPoints - existing().bonusPoints) <= 5000
+            && incoming().diff(existing()).affectedKeys().hasOnly(['bonusPoints', 'updatedAt']))
+          // Action 3b: Staff XP Deduction — Bounded monotonic increment up to +5000 deducted points per action
+          || ((isSuperAdmin() || hasStaffPerm('canGrantBonuses'))
+            && 'deductedPoints' in incoming()
+            && incoming().deductedPoints >= (('deductedPoints' in existing() && existing().deductedPoints is number) ? existing().deductedPoints : 0)
+            && (incoming().deductedPoints - (('deductedPoints' in existing() && existing().deductedPoints is number) ? existing().deductedPoints : 0)) <= 5000
+            && incoming().diff(existing()).affectedKeys().hasOnly(['deductedPoints', 'updatedAt']))
+          // Action 4: Super Admin Exclusive Escape Hatch
+          || isSuperAdmin()
+        );
+
+      allow delete: if isSignedIn() && isValidId(userId) && isSuperAdmin();
+    }
+
+    // =========================================================================
+    // 3. /workspaces/{userId} — Persistent Syllabus, Timetable & Attempts
+    // =========================================================================
+    match /workspaces/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isSuperAdmin());
+      allow list: if isSuperAdmin() || (isVerifiedUser() && existing().ownerUid == request.auth.uid);
+
+      // Pillar 1 Master Gate: Candidate must exist and not be banned
+      allow create: if isSignedIn()
+        && isOwner(userId)
+        && isValidId(userId)
+        && isValidCandidateWorkspace(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && isCandidateNotBanned(userId);
+
+      allow update: if isSignedIn()
+        && isValidCandidateWorkspace(incoming())
+        && isVerifiedUser()
+        && isValidId(userId)
+        && ((!('ownerUid' in existing()) || !(existing().ownerUid is string) || existing().ownerUid.size() == 0)
+          || incoming().ownerUid == existing().ownerUid)
+        && (((!('createdAt' in existing()) || !(existing().createdAt is timestamp)) && incoming().createdAt == request.time)
+          || incoming().createdAt == existing().createdAt)
+        && incoming().updatedAt == request.time
+        && (
+          (isOwner(userId)
+            && incoming().ownerUid == request.auth.uid
+            && isCandidateNotBanned(userId)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'ownerUid',
+              'onboarded',
+              'student',
+              'subjects',
+              'topics',
+              'schedule',
+              'attempts',
+              'achievements',
+              'lastReoptimizationNote',
+              'focusSessionsCompleted',
+              'focusMinutesTotal',
+              'aiStrategyBriefing',
+              'createdAt',
+              'updatedAt'
+            ]))
+          || isSuperAdmin()
+        );
+
+      allow delete: if isSignedIn() && isValidId(userId) && isSuperAdmin();
+    }
+
+    // =========================================================================
+    // 4. /global_updates/{updateId} — Global Announcements & Micro-Updates
+    // =========================================================================
+    match /global_updates/{updateId} {
+      allow get: if isValidId(updateId) && existing().visibility == 'public';
+      allow list: if existing().visibility == 'public';
+
+      allow create: if isSignedIn()
+        && isVerifiedUser()
+        && isValidId(updateId)
+        && isValidGlobalUpdate(incoming())
+        && incoming().authorUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isSuperAdmin() || hasStaffPerm('canPostUpdates'));
+
+      allow update: if isSignedIn()
+        && isValidGlobalUpdate(incoming())
+        && isVerifiedUser()
+        && isValidId(updateId)
+        && incoming().authorUid == existing().authorUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (hasStaffPerm('canPostUpdates')
+            && existing().authorUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'title',
+              'body',
+              'category',
+              'pinned',
+              'updatedAt'
+            ]))
+          || isSuperAdmin()
+        );
+
+      allow delete: if isSignedIn()
+        && isValidId(updateId)
+        && isVerifiedUser()
+        && (isSuperAdmin() || (hasStaffPerm('canPostUpdates') && existing().authorUid == request.auth.uid));
+    }
+
+    // =========================================================================
+    // 5. /individual_bonuses/{bonusId} — Individual Bonuses, XP Deductions & Notes
+    // =========================================================================
+    match /individual_bonuses/{bonusId} {
+      allow get: if isSignedIn()
+        && isValidId(bonusId)
+        && isVerifiedUser()
+        && (existing().targetUserId == request.auth.uid || isSuperAdmin() || isSubAdmin());
+
+      // Pillar 8: Zero get()/exists() inside allow list
+      allow list: if isSuperAdmin()
+        || (isVerifiedUser() && existing().targetUserId == request.auth.uid);
+
+      // Pillar 11 Global Consistency Invariant: target candidate must exist
+      allow create: if isSignedIn()
+        && isVerifiedUser()
+        && isValidId(bonusId)
+        && isValidIndividualBonus(incoming())
+        && incoming().grantedByUid == request.auth.uid
+        && incoming().acknowledged == false
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isSuperAdmin() || hasStaffPerm('canGrantBonuses'))
+        && exists(/databases/$(database)/documents/candidates/$(incoming().targetUserId));
+
+      allow update: if isSignedIn()
+        && isValidIndividualBonus(incoming())
+        && isVerifiedUser()
+        && isValidId(bonusId)
+        && incoming().targetUserId == existing().targetUserId
+        && incoming().grantedByUid == existing().grantedByUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Recipient candidate acknowledges bonus/deduction (Terminal State Lock: once true, cannot revert)
+          (existing().targetUserId == request.auth.uid
+            && existing().acknowledged == false
+            && incoming().acknowledged == true
+            && incoming().diff(existing()).affectedKeys().hasOnly(['acknowledged', 'updatedAt']))
+          // Action 2: Super Admin escape hatch
+          || isSuperAdmin()
+        );
+
+      allow delete: if isSignedIn() && isValidId(bonusId) && isSuperAdmin();
+    }
+
+    // =========================================================================
+    // 6. /staff_invites/{inviteKey} — Super Admin Delegated Role Invitations
+    // =========================================================================
+    match /staff_invites/{inviteKey} {
+      allow get: if isSignedIn()
+        && isValidId(inviteKey)
+        && isVerifiedUser()
+        && (isSuperAdmin() || (resource != null && existing().targetEmail == request.auth.token.email));
+      allow list: if isSuperAdmin();
+
+      allow create: if isSignedIn()
+        && isSuperAdmin()
+        && isValidId(inviteKey)
+        && isValidStaffInvite(incoming())
+        && incoming().inviteKey == inviteKey
+        && incoming().createdByUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isSignedIn()
+        && isValidStaffInvite(incoming())
+        && isValidId(inviteKey)
+        && isSuperAdmin()
+        && incoming().inviteKey == existing().inviteKey
+        && incoming().targetEmail == existing().targetEmail
+        && incoming().createdByUid == existing().createdByUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'adminPhone',
+          'displayName',
+          'canPostUpdates',
+          'canGrantBonuses',
+          'canBanUsers',
+          'status',
+          'updatedAt'
+        ]);
+
+      allow delete: if isSignedIn() && isValidId(inviteKey) && isSuperAdmin();
+    }
+
+    // =========================================================================
+    // 7. /staff_members/{userId} — Active Sub-Admin UID Permission Records
+    // =========================================================================
+    match /staff_members/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isSuperAdmin());
+      allow list: if isSuperAdmin();
+
+      allow create: if isSignedIn()
+        && isVerifiedUser()
+        && isValidId(userId)
+        && isValidStaffMember(incoming())
+        && incoming().userId == userId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isSuperAdmin()
+          || (
+            isOwner(userId)
+            && incoming().active == true
+            && exists(/databases/$(database)/documents/staff_invites/$(incoming().inviteKey))
+            && get(/databases/$(database)/documents/staff_invites/$(incoming().inviteKey)).data.status == 'active'
+            && get(/databases/$(database)/documents/staff_invites/$(incoming().inviteKey)).data.targetEmail == request.auth.token.email
+            && incoming().canPostUpdates == get(/databases/$(database)/documents/staff_invites/$(incoming().inviteKey)).data.canPostUpdates
+            && incoming().canGrantBonuses == get(/databases/$(database)/documents/staff_invites/$(incoming().inviteKey)).data.canGrantBonuses
+            && incoming().canBanUsers == get(/databases/$(database)/documents/staff_invites/$(incoming().inviteKey)).data.canBanUsers
+          )
+        );
+
+      allow update: if isSignedIn()
+        && isValidStaffMember(incoming())
+        && isVerifiedUser()
+        && isValidId(userId)
+        && incoming().userId == existing().userId
+        && incoming().inviteKey == existing().inviteKey
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Super Admin updates any Sub-Admin record directly
+          (isSuperAdmin()
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName',
+              'adminEmail',
+              'adminPhone',
+              'canPostUpdates',
+              'canGrantBonuses',
+              'canBanUsers',
+              'active',
+              'updatedAt'
+            ]))
+          // Action 2: Invited Gmail user syncs exact minimal-to-maximum permissions + contact from active parent StaffInvite
+          || (isOwner(userId)
+            && incoming().active == true
+            && exists(/databases/$(database)/documents/staff_invites/$(existing().inviteKey))
+            && get(/databases/$(database)/documents/staff_invites/$(existing().inviteKey)).data.status == 'active'
+            && get(/databases/$(database)/documents/staff_invites/$(existing().inviteKey)).data.targetEmail == request.auth.token.email
+            && incoming().canPostUpdates == get(/databases/$(database)/documents/staff_invites/$(existing().inviteKey)).data.canPostUpdates
+            && incoming().canGrantBonuses == get(/databases/$(database)/documents/staff_invites/$(existing().inviteKey)).data.canGrantBonuses
+            && incoming().canBanUsers == get(/databases/$(database)/documents/staff_invites/$(existing().inviteKey)).data.canBanUsers
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName',
+              'adminEmail',
+              'adminPhone',
+              'canPostUpdates',
+              'canGrantBonuses',
+              'canBanUsers',
+              'active',
+              'updatedAt'
+            ]))
+        );
+
+      allow delete: if isSignedIn() && isValidId(userId) && isSuperAdmin();
+    }
+
+    // =========================================================================
+    // 8. /admin_digests/{digestId} — Bounded O(1) Candidate Roster for Staff
+    // =========================================================================
+    match /admin_digests/{digestId} {
+      allow get: if isSignedIn() && isValidId(digestId) && (isSuperAdmin() || isSubAdmin());
+      allow list: if false;
+
+      allow create: if isSignedIn()
+        && isSuperAdmin()
+        && isValidId(digestId)
+        && digestId == 'overview'
+        && isValidAdminDigest(incoming())
+        && incoming().digestId == 'overview'
+        && incoming().updatedByUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isSignedIn()
+        && isValidAdminDigest(incoming())
+        && isValidId(digestId)
+        && digestId == 'overview'
+        && isSuperAdmin()
+        && incoming().digestId == existing().digestId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedByUid == request.auth.uid
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'entries',
+          'updatedByUid',
+          'updatedAt'
+        ]);
+
+      allow delete: if isSignedIn() && isValidId(digestId) && isSuperAdmin();
+    }
+
+    // =========================================================================
+    // 9. /issued_credentials/{credentialCode} — Publicly Verifiable Serials (Zero PII)
+    // =========================================================================
+    match /issued_credentials/{credentialCode} {
+      allow get: if isValidSerialId(credentialCode);
+      allow list: if false;
+
+      allow create: if isSignedIn()
+        && isVerifiedUser()
+        && isValidSerialId(credentialCode)
+        && isValidIssuedCredential(incoming())
+        && incoming().credentialCode == credentialCode
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          (isOwner(incoming().ownerUid)
+            && exists(/databases/$(database)/documents/candidates/$(incoming().ownerUid)))
+          || isSuperAdmin()
+        );
+
+      allow update: if isSignedIn()
+        && isValidIssuedCredential(incoming())
+        && isVerifiedUser()
+        && isValidSerialId(credentialCode)
+        && incoming().credentialCode == existing().credentialCode
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().credentialType == existing().credentialType
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (isOwner(existing().ownerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'candidateName',
+              'boardOrUniversity',
+              'examName',
+              'title',
+              'metricSummary',
+              'xpPoints',
+              'flexTier',
+              'issuedDate',
+              'updatedAt'
+            ]))
+          || isSuperAdmin()
+        );
+
+      allow delete: if isSignedIn() && isValidSerialId(credentialCode) && isSuperAdmin();
+    }
+
+    // =========================================================================
+    // 10. /credential_verifications/{verificationId} — Non-Admin Verifier Alerts
+    // =========================================================================
+    match /credential_verifications/{verificationId} {
+      allow get: if isSignedIn()
+        && isValidId(verificationId)
+        && isVerifiedUser()
+        && (existing().targetUserId == request.auth.uid || isSuperAdmin());
+
+      allow list: if isSuperAdmin()
+        || (isVerifiedUser() && existing().targetUserId == request.auth.uid);
+
+      allow create: if isSignedIn()
+        && isVerifiedUser()
+        && isValidId(verificationId)
+        && isValidCredentialVerification(incoming())
+        && incoming().verificationId == verificationId
+        && incoming().verifierUid == request.auth.uid
+        && incoming().acknowledged == false
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/issued_credentials/$(incoming().credentialCode))
+        && get(/databases/$(database)/documents/issued_credentials/$(incoming().credentialCode)).data.ownerUid == incoming().targetUserId;
+
+      allow update: if isSignedIn()
+        && isValidCredentialVerification(incoming())
+        && isVerifiedUser()
+        && isValidId(verificationId)
+        && incoming().verificationId == existing().verificationId
+        && incoming().credentialCode == existing().credentialCode
+        && incoming().targetUserId == existing().targetUserId
+        && incoming().verifierUid == existing().verifierUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (existing().targetUserId == request.auth.uid
+            && existing().acknowledged == false
+            && incoming().acknowledged == true
+            && incoming().diff(existing()).affectedKeys().hasOnly(['acknowledged', 'updatedAt']))
+          || isSuperAdmin()
+        );
+
+      allow delete: if isSignedIn() && isValidId(verificationId) && isSuperAdmin();
+    }
+  }
+}

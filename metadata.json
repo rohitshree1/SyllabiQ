@@ -1,0 +1,6 @@
+{
+  "name": "SyllabiQ — Adaptive Exam & Syllabus Planner",
+  "description": "AI-powered academic syllabus analyzer, alertness-matched study timetable generator, PYQ-aligned progressive daily test engine, and high-speed countdown revision workspace with offline PDF exports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,903 @@
+{
+  "entities": {
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated PII record storing a candidate's verified email and authentication provider.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the account owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified email address of the user.",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "authProvider": {
+          "type": "string",
+          "description": "OAuth sign-in provider identifier.",
+          "enum": ["google.com", "microsoft.com"],
+          "maxLength": 32
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": ["ownerUid", "email", "authProvider", "createdAt", "updatedAt"]
+    },
+    "CandidateSummary": {
+      "title": "CandidateSummary",
+      "description": "Candidate study telemetry, readiness score, bonus balance, and account moderation state.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the candidate.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Candidate display name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "avatarUrl": {
+          "type": "string",
+          "description": "Optional custom candidate profile image (compact cropped thumbnail data URL or HTTPS image URL).",
+          "minLength": 0,
+          "maxLength": 32000
+        },
+        "contactEmail": {
+          "type": "string",
+          "format": "email",
+          "description": "Candidate Gmail or academic contact email for mentor notifications.",
+          "minLength": 0,
+          "maxLength": 160
+        },
+        "phoneNumber": {
+          "type": "string",
+          "description": "Candidate WhatsApp/phone number for outreach notifications.",
+          "minLength": 0,
+          "maxLength": 32
+        },
+        "notifyGmailOptIn": {
+          "type": "boolean",
+          "description": "Whether candidate opted in to Gmail achievement and study alerts."
+        },
+        "notifyWhatsappOptIn": {
+          "type": "boolean",
+          "description": "Whether candidate opted in to WhatsApp achievement and study alerts."
+        },
+        "institutionType": {
+          "type": "string",
+          "description": "Institution classification.",
+          "enum": ["school", "university"],
+          "maxLength": 20
+        },
+        "boardOrUniversity": {
+          "type": "string",
+          "description": "School board or university name.",
+          "minLength": 0,
+          "maxLength": 120
+        },
+        "examName": {
+          "type": "string",
+          "description": "Target examination title.",
+          "minLength": 0,
+          "maxLength": 120
+        },
+        "examDate": {
+          "type": "string",
+          "description": "Target examination ISO date.",
+          "minLength": 0,
+          "maxLength": 20
+        },
+        "dailyStudyHours": {
+          "type": "number",
+          "description": "Target daily study hours."
+        },
+        "readinessPercent": {
+          "type": "number",
+          "description": "Computed exam readiness percentage (0-100)."
+        },
+        "overallRatingOutOf10": {
+          "type": "number",
+          "description": "Overall PYQ test score out of 10 (0-10)."
+        },
+        "completedChapters": {
+          "type": "integer",
+          "description": "Count of completed syllabus chapters."
+        },
+        "totalChapters": {
+          "type": "integer",
+          "description": "Total syllabus chapters."
+        },
+        "attemptsCount": {
+          "type": "integer",
+          "description": "Total completed PYQ and countdown tests."
+        },
+        "focusMinutesLogged": {
+          "type": "integer",
+          "description": "Total deep focus study timer minutes logged."
+        },
+        "bonusPoints": {
+          "type": "integer",
+          "description": "Admin-awarded bonus XP points."
+        },
+        "deductedPoints": {
+          "type": "integer",
+          "description": "Admin-deducted XP penalty points."
+        },
+        "xpPoints": {
+          "type": "integer",
+          "description": "Net candidate XP after inactivity decay and admin deductions."
+        },
+        "flexTier": {
+          "type": "string",
+          "description": "Auto-upgraded FlexCard rarity tier.",
+          "maxLength": 40
+        },
+        "lastActiveDate": {
+          "type": "string",
+          "description": "ISO date of candidate's last logged study activity.",
+          "maxLength": 20
+        },
+        "inactiveDays": {
+          "type": "integer",
+          "description": "Consecutive inactive days since lastActiveDate."
+        },
+        "activeLearnerActive": {
+          "type": "boolean",
+          "description": "Whether the Active Learner badge is currently active (< 3 inactive days)."
+        },
+        "unlockedBadges": {
+          "type": "array",
+          "description": "Bounded list of unlocked achievement titles (max 15)."
+        },
+        "weakTopics": {
+          "type": "array",
+          "description": "Bounded list of priority syllabus chapters needing attention (max 8)."
+        },
+        "banned": {
+          "type": "boolean",
+          "description": "Whether the candidate account is suspended by an administrator."
+        },
+        "banReason": {
+          "type": "string",
+          "description": "Reason recorded by admin when suspending an account.",
+          "minLength": 0,
+          "maxLength": 240
+        },
+        "adsEnabled": {
+          "type": "boolean",
+          "description": "Optional legacy ad toggle (defaults to false; all ads removed)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "ownerUid",
+        "displayName",
+        "boardOrUniversity",
+        "examName",
+        "examDate",
+        "readinessPercent",
+        "overallRatingOutOf10",
+        "completedChapters",
+        "totalChapters",
+        "attemptsCount",
+        "focusMinutesLogged",
+        "bonusPoints",
+        "banned",
+        "banReason",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CandidateWorkspace": {
+      "title": "CandidateWorkspace",
+      "description": "Full persistent candidate syllabus, alertness timetable, PYQ test attempts, and achievements stored as native maps and bounded lists.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the candidate.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "onboarded": {
+          "type": "boolean",
+          "description": "Whether initial syllabus setup is completed."
+        },
+        "student": {
+          "type": "object",
+          "description": "Student profile map."
+        },
+        "subjects": {
+          "type": "array",
+          "description": "Bounded list of subject profiles (max 25)."
+        },
+        "topics": {
+          "type": "array",
+          "description": "Bounded list of syllabus topics (max 150)."
+        },
+        "schedule": {
+          "type": "array",
+          "description": "Bounded list of daily timetable plans (max 120)."
+        },
+        "attempts": {
+          "type": "array",
+          "description": "Bounded list of recent test attempts (max 50)."
+        },
+        "achievements": {
+          "type": "array",
+          "description": "Bounded list of achievements (max 30)."
+        },
+        "lastReoptimizationNote": {
+          "type": "string",
+          "description": "Summary of most recent missed-day redistribution.",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "focusSessionsCompleted": {
+          "type": "integer",
+          "description": "Completed Pomodoro focus blocks."
+        },
+        "focusMinutesTotal": {
+          "type": "integer",
+          "description": "Cumulative minutes spent in deep focus sessions."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "ownerUid",
+        "onboarded",
+        "student",
+        "subjects",
+        "topics",
+        "schedule",
+        "attempts",
+        "achievements",
+        "lastReoptimizationNote",
+        "focusSessionsCompleted",
+        "focusMinutesTotal",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "GlobalUpdate": {
+      "title": "GlobalUpdate",
+      "description": "Platform-wide announcement or micro-update published by Super Admin or authorized Sub-Admins.",
+      "type": "object",
+      "properties": {
+        "authorUid": {
+          "type": "string",
+          "description": "UID of the staff author.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorName": {
+          "type": "string",
+          "description": "Display name of the publishing admin.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "authorRoleLabel": {
+          "type": "string",
+          "description": "Role label of the publisher.",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "title": {
+          "type": "string",
+          "description": "Concise update headline.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "body": {
+          "type": "string",
+          "description": "Announcement content body.",
+          "minLength": 1,
+          "maxLength": 800
+        },
+        "category": {
+          "type": "string",
+          "description": "Update category tag.",
+          "enum": ["exam_alert", "feature_update", "study_tip", "bonus_event"],
+          "maxLength": 32
+        },
+        "visibility": {
+          "type": "string",
+          "description": "Access scope for list query enforcement.",
+          "enum": ["public"],
+          "maxLength": 16
+        },
+        "pinned": {
+          "type": "boolean",
+          "description": "Whether this update stays pinned at the top of the feed."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "authorUid",
+        "authorName",
+        "authorRoleLabel",
+        "title",
+        "body",
+        "category",
+        "visibility",
+        "pinned",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "IndividualBonus": {
+      "title": "IndividualBonus",
+      "description": "Targeted reward, XP boost, streak shield, custom distinction, or mentor note granted to an individual candidate.",
+      "type": "object",
+      "properties": {
+        "targetUserId": {
+          "type": "string",
+          "description": "Candidate UID receiving the bonus.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "targetName": {
+          "type": "string",
+          "description": "Recipient candidate display name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "grantedByUid": {
+          "type": "string",
+          "description": "Admin UID who issued the bonus.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "grantedByName": {
+          "type": "string",
+          "description": "Admin display name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "bonusTitle": {
+          "type": "string",
+          "description": "Headline of the special bonus or badge.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "bonusType": {
+          "type": "string",
+          "description": "Category of individual bonus or XP deduction.",
+          "enum": ["xp_boost", "xp_deduction", "streak_shield", "custom_badge", "mentor_note"],
+          "maxLength": 32
+        },
+        "pointsAwarded": {
+          "type": "integer",
+          "description": "Numeric bonus XP awarded (0-5000)."
+        },
+        "message": {
+          "type": "string",
+          "description": "Personal encouragement or citation note.",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "acknowledged": {
+          "type": "boolean",
+          "description": "Whether the candidate has claimed/acknowledged the bonus."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "targetUserId",
+        "targetName",
+        "grantedByUid",
+        "grantedByName",
+        "bonusTitle",
+        "bonusType",
+        "pointsAwarded",
+        "message",
+        "acknowledged",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StaffInvite": {
+      "title": "StaffInvite",
+      "description": "Super-Admin-issued invitation granting limited Sub-Admin capabilities to a verified email.",
+      "type": "object",
+      "properties": {
+        "inviteKey": {
+          "type": "string",
+          "description": "Sanitized deterministic key derived from targetEmail.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "targetEmail": {
+          "type": "string",
+          "format": "email",
+          "description": "Lowercase Gmail address authorized to claim this Sub-Admin role.",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "adminPhone": {
+          "type": "string",
+          "description": "Phone/WhatsApp number assigned by Super Admin for candidate outreach.",
+          "minLength": 7,
+          "maxLength": 32
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Name or label of the delegated sub-admin.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "canPostUpdates": {
+          "type": "boolean",
+          "description": "Permission to publish and manage global updates."
+        },
+        "canGrantBonuses": {
+          "type": "boolean",
+          "description": "Permission to grant individual candidate bonuses."
+        },
+        "canBanUsers": {
+          "type": "boolean",
+          "description": "Permission to suspend or reinstate candidate accounts."
+        },
+        "status": {
+          "type": "string",
+          "description": "Lifecycle status of the invitation.",
+          "enum": ["active", "revoked"],
+          "maxLength": 20
+        },
+        "createdByUid": {
+          "type": "string",
+          "description": "Super Admin UID who created the invite.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "inviteKey",
+        "targetEmail",
+        "adminPhone",
+        "displayName",
+        "canPostUpdates",
+        "canGrantBonuses",
+        "canBanUsers",
+        "status",
+        "createdByUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StaffMember": {
+      "title": "StaffMember",
+      "description": "Active UID-keyed Sub-Admin permission record evaluated by Firestore security rules.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the Sub-Admin.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "inviteKey": {
+          "type": "string",
+          "description": "Reference to the StaffInvite key used to authorize this member.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name of the Sub-Admin.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "adminEmail": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified Gmail address of the Sub-Admin.",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "adminPhone": {
+          "type": "string",
+          "description": "Assigned phone/WhatsApp number synced from StaffInvite.",
+          "minLength": 0,
+          "maxLength": 32
+        },
+        "role": {
+          "type": "string",
+          "description": "Delegated staff tier.",
+          "enum": ["sub_admin"],
+          "maxLength": 24
+        },
+        "canPostUpdates": {
+          "type": "boolean",
+          "description": "Permission to post/edit global updates."
+        },
+        "canGrantBonuses": {
+          "type": "boolean",
+          "description": "Permission to award individual bonuses."
+        },
+        "canBanUsers": {
+          "type": "boolean",
+          "description": "Permission to ban/unban candidates."
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Whether this Sub-Admin seat is currently active."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "userId",
+        "inviteKey",
+        "displayName",
+        "role",
+        "canPostUpdates",
+        "canGrantBonuses",
+        "canBanUsers",
+        "active",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminDigest": {
+      "title": "AdminDigest",
+      "description": "Bounded O(1) candidate directory snapshot synced by Super Admin for Sub-Admin inspection without list queries.",
+      "type": "object",
+      "properties": {
+        "digestId": {
+          "type": "string",
+          "description": "Document identifier ('overview').",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "entries": {
+          "type": "array",
+          "description": "Bounded list of up to 50 candidate summary maps."
+        },
+        "updatedByUid": {
+          "type": "string",
+          "description": "Super Admin UID who refreshed the digest.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": ["digestId", "entries", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "IssuedCredential": {
+      "title": "IssuedCredential",
+      "description": "Publicly verifiable non-PII FlexCard or Report Card serial record issued by SyllabiQ.",
+      "type": "object",
+      "properties": {
+        "credentialCode": {
+          "type": "string",
+          "description": "Unique serial code (SLQ-FC-... or SLQ-RC-...).",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "credentialType": {
+          "type": "string",
+          "description": "Credential surface type.",
+          "enum": ["flexcard", "report_card"],
+          "maxLength": 20
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "Candidate owner UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "candidateName": {
+          "type": "string",
+          "description": "Candidate display name printed on the credential.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "boardOrUniversity": {
+          "type": "string",
+          "description": "Board or university printed on the credential.",
+          "minLength": 0,
+          "maxLength": 120
+        },
+        "examName": {
+          "type": "string",
+          "description": "Target examination printed on the credential.",
+          "minLength": 0,
+          "maxLength": 120
+        },
+        "title": {
+          "type": "string",
+          "description": "Achievement headline or Official Academic Report Card title.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "metricSummary": {
+          "type": "string",
+          "description": "Verified performance metric summary.",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "xpPoints": {
+          "type": "integer",
+          "description": "Candidate net XP at issuance."
+        },
+        "flexTier": {
+          "type": "string",
+          "description": "FlexCard rarity tier at issuance.",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "issuedDate": {
+          "type": "string",
+          "description": "ISO date of issuance.",
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "credentialCode",
+        "credentialType",
+        "ownerUid",
+        "candidateName",
+        "boardOrUniversity",
+        "examName",
+        "title",
+        "metricSummary",
+        "xpPoints",
+        "flexTier",
+        "issuedDate",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CredentialVerification": {
+      "title": "CredentialVerification",
+      "description": "Notification record sent to a candidate when a non-admin verifies their FlexCard or Report Card serial.",
+      "type": "object",
+      "properties": {
+        "verificationId": {
+          "type": "string",
+          "description": "Verification record ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "credentialCode": {
+          "type": "string",
+          "description": "Verified serial code.",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "credentialType": {
+          "type": "string",
+          "description": "Credential surface type.",
+          "enum": ["flexcard", "report_card"],
+          "maxLength": 20
+        },
+        "targetUserId": {
+          "type": "string",
+          "description": "Candidate UID notified of the verification.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "credentialTitle": {
+          "type": "string",
+          "description": "Title of the verified FlexCard or Report Card.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "verifierUid": {
+          "type": "string",
+          "description": "Authenticated UID of the non-admin verifier.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "verifierName": {
+          "type": "string",
+          "description": "Full name provided by the non-admin verifier.",
+          "minLength": 2,
+          "maxLength": 80
+        },
+        "verifierGmail": {
+          "type": "string",
+          "format": "email",
+          "description": "Gmail address provided by the non-admin verifier.",
+          "minLength": 3,
+          "maxLength": 160,
+          "pattern": "^[^@\\s]+@gmail\\.com$"
+        },
+        "verifierPost": {
+          "type": "string",
+          "description": "Declared role/post of the verifier.",
+          "enum": ["teacher", "company_executive", "student"],
+          "maxLength": 32
+        },
+        "verifiedAtDate": {
+          "type": "string",
+          "description": "ISO date of verification.",
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "acknowledged": {
+          "type": "boolean",
+          "description": "Whether the candidate has dismissed/read the verification alert."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "verificationId",
+        "credentialCode",
+        "credentialType",
+        "targetUserId",
+        "credentialTitle",
+        "verifierUid",
+        "verifierName",
+        "verifierGmail",
+        "verifierPost",
+        "verifiedAtDate",
+        "acknowledged",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users_private/{userId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Isolated PII storage for candidate email and OAuth provider."
+    },
+    "/candidates/{userId}": {
+      "schema": { "$ref": "#/entities/CandidateSummary" },
+      "description": "Candidate readiness metrics, bonus/deduction balance, and account ban state."
+    },
+    "/workspaces/{userId}": {
+      "schema": { "$ref": "#/entities/CandidateWorkspace" },
+      "description": "Full persistent SyllabiQ study workspace state per candidate."
+    },
+    "/global_updates/{updateId}": {
+      "schema": { "$ref": "#/entities/GlobalUpdate" },
+      "description": "Global platform announcements and exam updates."
+    },
+    "/individual_bonuses/{bonusId}": {
+      "schema": { "$ref": "#/entities/IndividualBonus" },
+      "description": "Targeted bonuses, XP deductions, badges, and direct notes granted to specific candidates."
+    },
+    "/staff_invites/{inviteKey}": {
+      "schema": { "$ref": "#/entities/StaffInvite" },
+      "description": "Super Admin email invitations configuring limited Sub-Admin permissions."
+    },
+    "/staff_members/{userId}": {
+      "schema": { "$ref": "#/entities/StaffMember" },
+      "description": "Active UID-indexed Sub-Admin permission records."
+    },
+    "/admin_digests/{digestId}": {
+      "schema": { "$ref": "#/entities/AdminDigest" },
+      "description": "Single-document O(1) candidate roster snapshot for Sub-Admins."
+    },
+    "/issued_credentials/{credentialCode}": {
+      "schema": { "$ref": "#/entities/IssuedCredential" },
+      "description": "Publicly verifiable O(1) registry of issued FlexCard and Report Card serials."
+    },
+    "/credential_verifications/{verificationId}": {
+      "schema": { "$ref": "#/entities/CredentialVerification" },
+      "description": "Candidate-isolated notification log when non-admin visitors verify a serial."
+    }
+  }
+}
