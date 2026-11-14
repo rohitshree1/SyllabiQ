@@ -1847,7 +1847,7 @@ export default function App() {
         <div>
           <div className="px-2 pb-5 border-b border-slate-200/70">
             <a
-              href="/"
+              href="./"
               className="font-display text-xl font-bold tracking-tight text-slate-900"
             >
               SyllabiQ

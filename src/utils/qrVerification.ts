@@ -8,15 +8,19 @@ export interface QrMatrixData {
 }
 
 /**
- * Resolves a clean base origin URL without trailing slashes.
+ * Resolves a clean base URL (including any subpath such as GitHub Pages `/<repo>`) without trailing slashes.
  */
 export function resolveVerificationOrigin(explicitOrigin?: string): string {
-  const candidate =
-    explicitOrigin?.trim() ||
-    (typeof window !== 'undefined' && window.location?.origin
-      ? window.location.origin
-      : 'https://syllabiq.app');
-  return candidate.replace(/\/+$/, '');
+  if (explicitOrigin?.trim()) {
+    return explicitOrigin.trim().replace(/\/+$/, '');
+  }
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    const cleanPath = (window.location.pathname || '')
+      .replace(/\/index\.html$/i, '')
+      .replace(/\/+$/, '');
+    return `${window.location.origin}${cleanPath}`.replace(/\/+$/, '');
+  }
+  return 'https://syllabiq.app';
 }
 
 /**

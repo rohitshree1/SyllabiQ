@@ -22,6 +22,9 @@ test('buildVerificationDeepLink and extractVerifySerialFromSearch round-trip Fle
   assert.equal(reportUrl, `http://localhost:3000/?verify=${reportSerial}`);
   assert.equal(extractVerifySerialFromSearch(`?verify=${reportSerial.toLowerCase()}`), reportSerial);
 
+  const ghPagesUrl = buildVerificationDeepLink(flexSerial, 'https://scholar.github.io/syllabiq/');
+  assert.equal(ghPagesUrl, `https://scholar.github.io/syllabiq/?verify=${flexSerial}`);
+
   assert.equal(extractVerifySerialFromSearch('?autostart=1'), null);
   assert.equal(extractVerifySerialFromSearch(''), null);
 });

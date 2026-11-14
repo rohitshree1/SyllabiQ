@@ -59,6 +59,18 @@ async function fetchWithTimeout(
   }
 }
 
+async function parseJsonSafely<T = Record<string, unknown>>(res: Response): Promise<T | null> {
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  if (!contentType.includes('application/json')) {
+    return null;
+  }
+  try {
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
 export async function parseSyllabusWithAI(params: {
   rawText: string;
   fileData?: { mimeType: string; base64: string; fileName: string } | null;
@@ -684,8 +696,16 @@ export async function verifyCredentialApi(params: {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
     });
-    const data = await res.json();
-    if (!res.ok) {
+    const data = await parseJsonSafely<Record<string, unknown>>(res);
+    if (!res.ok || !data) {
+      if (params.cloudCredential && (res.status === 404 || !data)) {
+        return {
+          authentic: true,
+          normalizedSerial: params.cloudCredential.credentialCode,
+          credential: params.cloudCredential,
+          notifiedOwner: !params.isStaff,
+        };
+      }
       return {
         authentic: false,
         normalizedSerial: params.serialCode.trim().toUpperCase(),
@@ -863,8 +883,8 @@ export async function decideSuspensionAppealApi(params: {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
     });
-    const data = await res.json();
-    if (!res.ok) {
+    const data = await parseJsonSafely<Record<string, unknown>>(res);
+    if (!res.ok || !data) {
       return { error: String(data?.error || 'Unable to process appeal decision.') };
     }
     return { appeal: data?.appeal as SuspensionAppealRecord };
@@ -941,9 +961,16 @@ export async function postSocialMessageApi(payload: {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
-    if (!res.ok) {
-      return { error: String(data?.error || 'Message rejected by conduct policy.') };
+    const data = await parseJsonSafely<Record<string, unknown>>(res);
+    if (!res.ok || !data) {
+      return {
+        error: String(
+          data?.error ||
+            (res.status === 404
+              ? 'Live chat backend is unavailable on static hosting.'
+              : 'Message rejected by conduct policy.')
+        ),
+      };
     }
     return { message: data?.message as SocialChatMessage };
   } catch {

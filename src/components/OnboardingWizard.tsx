@@ -388,7 +388,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({
       {/* Strict 3-Zone Top Bar Contract (Frosted Glass) */}
       <header className="glass-header sticky top-0 z-30 flex items-center justify-between gap-8 px-6 py-4">
         <a
-          href="/"
+          href="./"
           className="font-display text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
         >
           SyllabiQ

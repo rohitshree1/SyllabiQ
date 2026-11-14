@@ -105,11 +105,18 @@ export const AboutAndReferralView: React.FC<AboutAndReferralViewProps> = ({
   const referralCode =
     state.student.referralCode || generateReferralCode(ownerKey, state.student.name);
 
+  const browserBaseUrl =
+    typeof window !== 'undefined' && window.location?.origin
+      ? `${window.location.origin}${(window.location.pathname || '')
+          .replace(/\/index\.html$/i, '')
+          .replace(/\/+$/, '')}`
+      : 'https://syllabiq.app';
+
   const referralLinks = buildReferralShareLinks({
     referralCode,
     candidateName: state.student.name,
     examName: state.student.examName || state.student.boardOrUniversity,
-    originUrl: typeof window !== 'undefined' ? window.location.origin : 'https://syllabiq.app',
+    originUrl: browserBaseUrl,
   });
 
   const handleCopyUrl = async () => {
